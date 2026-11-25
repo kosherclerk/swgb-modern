@@ -3,6 +3,7 @@
 #include "hook.h"
 #include "resources.h"
 #include <vector>
+#include <algorithm>
 
 namespace swgbm {
 namespace {
@@ -78,7 +79,20 @@ void __stdcall TraceSetRes(void* self, int w, int h) {
         disp ? *(int*)(disp + 0x18) : -1, disp ? *(int*)(disp + 0x1c) : -1, disp ? disp[0x3c] : -1, disp ? disp[0x3d] : -1);
 }
 
+// Smooth rendering: the game screen redraws its main view at most every
+// 100 ms and the minimap every 333 ms (on top of the 50 ms WM_TIMER that
+// window.cpp shortens). Rendering only; the simulation runs on elapsed time.
+void ApplyFrameRate(uintptr_t viewSite, uintptr_t mapSite) {
+    int fps = CfgInt("Fixes", "GameFPS", 60);
+    if (fps <= 20 || fps > 240) return;
+    uint32_t view = (uint32_t)(1000 / fps);
+    uint32_t map = (uint32_t)std::max(50, std::min(333, CfgInt("Fixes", "MinimapRefreshMs", 100)));
+    bool a = PatchImm(viewSite, 0x64, view), b = PatchImm(mapSite, 0x14d, map);
+    LOG("frame rate: main view redraw 100 -> %u ms (%s), minimap 333 -> %u ms (%s)", view, a ? "ok" : "skipped", map, b ? "ok" : "skipped");
+}
+
 void ApplyCloneCampaigns() {
+    ApplyFrameRate(0x4f2fd7, 0x4f2f17);
     if (CfgBool("Debug", "TraceEngine", false)) {
         // 42ca10: sub esp,20h; push ebx; push ebp  (thiscall, args w,h)
         Cave c;

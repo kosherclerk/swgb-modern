@@ -105,14 +105,17 @@ GameExe DetectExe() {
         DWORD ep = nt->OptionalHeader.AddressOfEntryPoint;
         if (ts == 0x3cf57142 && soi == 0x3b1000 && ep == 0x236601) return GameExe::CloneCampaigns;
         if (ts == 0x3c03fd69 && soi == 0x3af000 && ep == 0x232881) return GameExe::BaseGame;
-        // Expanding Fronts ships its own modified executable; we don't know every
-        // EF build byte-for-byte, so identify it by its data folder instead.
-        std::wstring ef = GameDir() + L"\\Data\\Expanding Fronts";
-        DWORD a = GetFileAttributesW(ef.c_str());
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        if ((a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) || wcsstr(exe, L"EF") || wcsstr(exe, L"ef.exe"))
-            return GameExe::ExpandingFronts;
+        // Expanding Fronts: battlegrounds_x2.exe is the CC 1.1 image (same link
+        // timestamp) with an extra ".patch" section that loads efpatch.dll.
+        // GameRanger users rename it to battlegrounds_x1.exe, so don't rely on
+        // the file name.
+        std::wstring efpatch = GameDir() + L"\\efpatch.dll";
+        bool hasEfPatch = GetFileAttributesW(efpatch.c_str()) != INVALID_FILE_ATTRIBUTES;
+        auto sec = IMAGE_FIRST_SECTION(nt);
+        bool hasPatchSection = false;
+        for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
+            if (memcmp(sec[i].Name, ".patch", 6) == 0) hasPatchSection = true;
+        if (ts == 0x3cf57142 && (hasPatchSection || (soi != 0x3b1000 && hasEfPatch))) return GameExe::ExpandingFronts;
         return GameExe::Unknown;
     }();
     return cached;

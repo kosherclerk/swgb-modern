@@ -12,6 +12,7 @@
 #include <vector>
 #include <map>
 #include <sstream>
+#include <algorithm>
 
 namespace swgbm {
 namespace {
@@ -37,8 +38,18 @@ std::vector<std::string> Split(const std::string& s, char sep) {
     return out;
 }
 
+// Panel geometry (1280 layout): left of kSplit = unit grid (anchored left),
+// right of it = info/minimap/buttons (anchored right); the central info panel
+// spanning the split stretches. "center" keeps the 1280 panel centred instead.
+struct PanelGeom { bool stretch; int split; int strip; };
+PanelGeom Geom() {
+    return {CfgStr("Widescreen", "PanelStyle", "stretch") != "center", CfgInt("Widescreen", "PanelSplitX", 436),
+            std::max(4, CfgInt("Widescreen", "PanelStripW", 16))};
+}
+
 std::string RewriteLayout(const std::string& src, int W, int H) {
-    const int dx = (W - 1280) / 2, dy = H - 1024;
+    const PanelGeom g = Geom();
+    const int extra = W - 1280, dx = extra / 2, dy = H - 1024;
     std::string out;
     bool inRes = false;
     size_t a = 0;
@@ -51,14 +62,18 @@ std::string RewriteLayout(const std::string& src, int W, int H) {
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) { eol.insert(eol.begin(), line.back()); line.pop_back(); }
         auto f = Split(line, '\t');
         if (!f.empty() && f[0] == "Item Name") inRes = f.size() > 1 && f[1].find("Resolution Specific") != std::string::npos;
-        else if (f.empty() || f[0].empty()) { if (!f.empty() && f.size() > 1 && f[1] == "800x600") {} }
         if (inRes && f.size() >= 13 && !f[0].empty() && f[0] != "Item Name" && isdigit((unsigned char)f[9][0])) {
             int x = atoi(f[9].c_str()), y = atoi(f[10].c_str()), w = atoi(f[11].c_str()), h = atoi(f[12].c_str());
             const std::string& n = f[0];
             if (n == "ToolBox") { w = W; }
             else if (n.rfind("Main Viewport", 0) == 0) { w = W; h += dy; }
             else if (n == "Objectives Changed Text") { x = W / 2; w = W / 2; }
-            else { x += dx; y += dy; } // bottom panel controls follow the centred panel
+            else {
+                y += dy;
+                if (!g.stretch) x += dx;
+                else if (x >= g.split) x += extra;
+                else if (x + w > g.split) w += extra;
+            }
             f[9] = std::to_string(x); f[10] = std::to_string(y); f[11] = std::to_string(w); f[12] = std::to_string(h);
             rows++;
             line.clear();
@@ -66,7 +81,7 @@ std::string RewriteLayout(const std::string& src, int W, int H) {
         }
         out += line + eol;
     }
-    LOG("widescreen: layout table rewritten (%d rects) for %dx%d", rows, W, H);
+    LOG("widescreen: layout table rewritten (%d rects) for %dx%d, panel %s", rows, W, H, g.stretch ? "stretched" : "centred");
     return out;
 }
 
@@ -76,19 +91,24 @@ std::string WidenPanel(const uint8_t* data, size_t size, int W, int H) {
     std::vector<SlpFrame> fr;
     if (!SlpDecode(data, size, fr) || fr.empty() || fr[0].w != 1280) return std::string();
     const SlpFrame& o = fr[0];
-    int dx = (W - 1280) / 2;
+    const PanelGeom g = Geom();
+    const int extra = W - 1280, dx = extra / 2;
     SlpFrame n;
     n.w = W; n.h = o.h; n.hx = 0; n.hy = -(H - o.h);
     n.px.assign((size_t)n.w * n.h, -1);
     const int s0 = CfgInt("Widescreen", "FillStripX", 236), sw = CfgInt("Widescreen", "FillStripW", 56);
     for (int y = 0; y < n.h; y++) {
+        const int16_t* row = &o.px[(size_t)y * 1280];
         for (int x = 0; x < n.w; x++) {
-            int sx = x - dx;
             int16_t v;
-            if (sx >= 0 && sx < 1280) v = o.px[(size_t)y * 1280 + sx];
-            else {
-                int k = sx < 0 ? (sw - 1 - ((-sx - 1) % sw)) : ((sx - 1280) % sw);
-                v = o.px[(size_t)y * 1280 + s0 + k];
+            if (g.stretch) {
+                if (x < g.split) v = row[x];
+                else if (x < g.split + extra) v = row[g.split + ((x - g.split) % g.strip)];
+                else v = row[x - extra];
+            } else {
+                int sx = x - dx;
+                if (sx >= 0 && sx < 1280) v = row[sx];
+                else v = row[s0 + (sx < 0 ? (sw - 1 - ((-sx - 1) % sw)) : ((sx - 1280) % sw))];
             }
             n.at(x, y) = v;
         }

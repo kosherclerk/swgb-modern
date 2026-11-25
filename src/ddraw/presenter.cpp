@@ -169,7 +169,8 @@ void Presenter::Run() {
     QueryPerformanceCounter(&last);
 
     Frame frame;
-    DWORD frames = 0, fpsTick = GetTickCount();
+    DWORD frames = 0, uniqueFrames = 0, fpsTick = GetTickCount();
+    uint64_t lastHash = 0;
     while (running_) {
         DWORD wr = WaitForSingleObject(frameEvent_, 200); // periodic refresh keeps resizes smooth
         if (!running_) break;
@@ -194,14 +195,22 @@ void Presenter::Run() {
         }
         (void)wr;
         frames++;
+        if (LogEnabled()) { // count frames whose content actually changed
+            uint64_t hsh = 1469598103934665603ull;
+            const uint64_t* q = (const uint64_t*)frame.pixels.data();
+            for (size_t i = 0, n = frame.pixels.size() / 8; i < n; i += 7) hsh = (hsh ^ q[i]) * 1099511628211ull;
+            if (hsh != lastHash) { uniqueFrames++; lastHash = hsh; }
+        }
         if (dumpEvery > 0 && GetTickCount() - lastDump > (DWORD)dumpEvery * 1000) {
             DumpFrameBMP(frame);
             lastDump = GetTickCount();
         }
         if (GetTickCount() - fpsTick >= 5000) {
-            LOG("present: %.1f fps, game %dx%d -> viewport %dx%d @%d,%d (%s)", frames * 1000.0 / (GetTickCount() - fpsTick),
+            LOG("present: %.1f fps (%.1f distinct), game %dx%d -> viewport %dx%d @%d,%d (%s)", frames * 1000.0 / (GetTickCount() - fpsTick),
+                uniqueFrames * 1000.0 / (GetTickCount() - fpsTick),
                 frame.width, frame.height, vp.w, vp.h, vp.x, vp.y, backendName_);
             frames = 0;
+            uniqueFrames = 0;
             fpsTick = GetTickCount();
             if (CfgBool("Debug", "ThreadReport", false)) LogThreadReport();
         }

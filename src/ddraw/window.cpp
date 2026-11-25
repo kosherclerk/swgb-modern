@@ -36,6 +36,24 @@ decltype(&PeekMessageA) pPeekMessageA = PeekMessageA;
 decltype(&WindowFromPoint) pWindowFromPoint = WindowFromPoint;
 decltype(&CreateWindowExA) pCreateWindowExA = CreateWindowExA;
 decltype(&SendMessageA) pSendMessageA = SendMessageA;
+decltype(&SetTimer) pSetTimer = SetTimer;
+
+// The engine redraws the game world from a 50 ms WM_TIMER (timer id 1), i.e.
+// 20 frames per second. The simulation itself advances by elapsed time, so a
+// shorter interval only adds frames (smoother scrolling/animation) without
+// changing game speed.
+UINT_PTR WINAPI H_SetTimer(HWND h, UINT_PTR id, UINT ms, TIMERPROC fn) {
+    LOG("SetTimer(hwnd=%p, id=%u, %u ms, proc=%p) from %p", h, (unsigned)id, ms, fn, __builtin_return_address(0));
+    if (h && id == 1 && ms == 50 && !fn && DetectExe() != GameExe::ExpandingFronts) {
+        int fps = CfgInt("Fixes", "GameFPS", 60);
+        if (fps >= 20 && fps <= 240) {
+            UINT n = (UINT)(1000 / fps);
+            LOG("game redraw timer: %u ms -> %u ms (%d fps)", ms, n, fps);
+            ms = n;
+        }
+    }
+    return pSetTimer(h, id, ms, fn);
+}
 
 // Fonts given to child controls are scaled with the viewport so native EDIT
 // text matches the size of the upscaled image.
@@ -192,6 +210,19 @@ BOOL WINAPI H_MoveWindow(HWND h, int x, int y, int cx, int cy, BOOL rp) {
 HWND WINAPI H_CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h, HWND parent,
                               HMENU menu, HINSTANCE inst, LPVOID param) {
     if (g_hwnd && parent == g_hwnd && (style & WS_CHILD) && x != (int)CW_USEDEFAULT) MapChildRect(x, y, w, h);
+    if (!parent && !(style & WS_CHILD)) {
+        // A window's DPI awareness is fixed by the creating thread's context.
+        // Mods such as Expanding Fronts switch the thread to DPI-unaware, which
+        // makes Windows bitmap-scale (and crop) our full-resolution output on
+        // scaled displays. Create top-level windows per-monitor aware.
+        typedef HANDLE(WINAPI * SetCtx)(HANDLE);
+        static auto setCtx = (SetCtx)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetThreadDpiAwarenessContext");
+        HANDLE prev = setCtx ? setCtx((HANDLE)-4) : nullptr;
+        HWND r = pCreateWindowExA(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
+        if (setCtx && prev) setCtx(prev);
+        LOG("top-level window %p created per-monitor DPI aware (previous thread context %p)", r, prev);
+        return r;
+    }
     return pCreateWindowExA(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
 }
 
@@ -240,6 +271,11 @@ LPARAM MapMouseLParam(LPARAM lp) {
 }
 
 LRESULT CALLBACK SubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_TIMER && wp == 1 && LogEnabled()) {
+        static DWORD n = 0, t0 = GetTickCount();
+        n++;
+        if (GetTickCount() - t0 >= 5000) { LOG("WM_TIMER(1): %.1f/s", n * 1000.0 / (GetTickCount() - t0)); n = 0; t0 = GetTickCount(); }
+    }
     switch (msg) {
     case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
@@ -307,6 +343,7 @@ void Window::InstallHooks() {
         {"WindowFromPoint", (void*)H_WindowFromPoint, (void**)&pWindowFromPoint},
         {"CreateWindowExA", (void*)H_CreateWindowExA, (void**)&pCreateWindowExA},
         {"SendMessageA", (void*)H_SendMessageA, (void**)&pSendMessageA},
+        {"SetTimer", (void*)H_SetTimer, (void**)&pSetTimer},
     };
     for (auto& hk : hooks) {
         void* o = HookIAT(nullptr, "USER32.dll", hk.name, hk.fn);

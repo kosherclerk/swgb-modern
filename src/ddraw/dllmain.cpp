@@ -3,6 +3,7 @@
 #include "presenter.h"
 #include "patches.h"
 #include "audiofix.h"
+#include "crash.h"
 
 using namespace swgbm;
 
@@ -34,6 +35,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
 
 HRESULT WINAPI DirectDrawCreate(GUID*, LPDIRECTDRAW* out, IUnknown*) {
     Init();
+    static bool crashInstalled = false;
+    if (!crashInstalled) { crashInstalled = true; Crash::Install(); }
     if (!out) return DDERR_INVALIDPARAMS;
     *out = new DDraw();
     LOG("DirectDrawCreate");

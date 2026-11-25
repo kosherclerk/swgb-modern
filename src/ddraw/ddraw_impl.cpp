@@ -24,6 +24,25 @@ struct Lock_ {
 
 static void NotifyPrimaryChanged(bool flip) { Presenter::Get().FrameReady(flip); }
 
+// Debug: heuristic stack scan for return addresses into the game's code.
+static void LogStackScan(const char* tag) {
+    static int budget = 4, skip = 400;
+    if (skip-- > 0 || budget <= 0 || !CfgBool("Debug", "StackScan", false)) return;
+    budget--;
+    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+    uintptr_t* sp = (uintptr_t*)__builtin_frame_address(0);
+    char buf[2048];
+    int n = snprintf(buf, sizeof(buf), "stack[%s]:", tag);
+    for (int i = 0; i < 1024 && (void*)(sp + i) < tib->StackBase && n < 2000; i++) {
+        uintptr_t v = sp[i];
+        if (v > 0x401000 && v < 0x648000) {
+            auto p = (const uint8_t*)v;
+            if (p[-5] == 0xE8 || p[-2] == 0xFF || p[-3] == 0xFF || p[-6] == 0xFF) n += snprintf(buf + n, sizeof(buf) - n, " %06x", (unsigned)v);
+        }
+    }
+    LOG("%s", buf);
+}
+
 // ------------------------------------------------------------------ palette
 DDPalette::DDPalette(DWORD flags, const PALETTEENTRY* e) : flags_(flags) {
     memset(entries_, 0, sizeof(entries_));
@@ -275,6 +294,7 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
     // boundary, treated like Flip() for pacing.
     if (IsPrimary()) {
         bool frame = (int64_t)(d.right - d.left) * (d.bottom - d.top) * 2 >= (int64_t)w_ * h_;
+        if (h_ > 600) LogStackScan(frame ? "blt-frame" : "blt-partial");
         NotifyPrimaryChanged(frame);
     }
     return DD_OK;
