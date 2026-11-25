@@ -18,7 +18,7 @@ else
   DDRAW_SRC="$(echo $DDRAW_SRC | sed 's#src/ddraw/backends/vulkan.cpp##') src/ddraw/backends/novulkan.cpp"
 fi
 echo "== ddraw.dll"
-$CXX $CXXFLAGS $DDRAW_SRC src/ddraw/ddraw.def -o $OUT/ddraw.dll $LDFLAGS -lgdi32 -luser32 -lole32 -luuid -ldxguid -lwinmm -ldwmapi -ldxguid -lopengl32 -lpsapi
+$CXX $CXXFLAGS $DDRAW_SRC src/ddraw/ddraw.def -o $OUT/ddraw.dll $LDFLAGS -lgdi32 -luser32 -lole32 -luuid -ldxguid -lwinmm -ldwmapi -ldxguid -lopengl32 -lpsapi -lvfw32 -lmfuuid
 if [ -d src/dsound ] && ls src/dsound/*.cpp >/dev/null 2>&1; then
   echo "== dsound.dll"
   $CXX $CXXFLAGS src/common/common.cpp src/dsound/*.cpp src/dsound/dsound.def -o $OUT/dsound.dll $LDFLAGS -lole32 -luuid -lwinmm -lavrt -lksuser -ldxguid -luuid

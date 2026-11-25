@@ -164,6 +164,9 @@ public:
         return ok;
     }
     void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
+    // AMD's 32-bit D3D12 driver busy-polls when the queue goes idle; a steady
+    // present cadence keeps it parked (measured: menu CPU 100% -> see log).
+    bool SkipIdenticalFrames() const override { return CfgBool("Display", "D3D12SteadyPresent", true) ? false : true; }
 
 private:
     // Overlay: default-heap texture updated from a per-frame upload buffer.

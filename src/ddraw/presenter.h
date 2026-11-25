@@ -18,6 +18,11 @@ public:
     Viewport CurrentViewport();      // client-space rect the game image occupies
     void GameSize(int& w, int& h);
     const char* BackendName();
+    // Overlay layer (videos, HD text/menus). Thread safe: the pixels are copied.
+    // rect is in game-frame coordinates. Rows [y0,y1) changed (-1 = all).
+    void SetOverlay(const uint32_t* bgraPremul, int w, int h, float x, float y, float rw, float rh, bool hideFrame,
+                    int y0 = -1, int y1 = -1);
+    void ClearOverlay();
 
 private:
     static DWORD WINAPI ThreadMain(void*);
@@ -35,6 +40,10 @@ private:
     volatile LONG running_ = 0;
     volatile LONG pendingFlip_ = 0;
     CRITICAL_SECTION vpLock_;
+    CRITICAL_SECTION ovLock_;
+    Overlay ovShared_;        // written by producers under ovLock_
+    bool ovChanged_ = false;
+    Overlay ovRender_;        // presenter-thread copy handed to the backend
     Viewport vp_ = {0, 0, 800, 600};
     int gameW_ = 800, gameH_ = 600;
     const char* backendName_ = "none";

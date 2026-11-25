@@ -60,6 +60,9 @@ public:
     // Optional: block until the swapchain can accept another frame (low
     // latency: the presenter then snapshots the freshest game frame).
     virtual void WaitForNextFrame() {}
+    // Whether identical frames may be skipped (some drivers behave better
+    // with a steady present cadence).
+    virtual bool SkipIdenticalFrames() const { return true; }
     // Optional overlay; drawn after the game image in Present(). Backends that
     // do not override it simply show no overlay.
     virtual void SetOverlay(const Overlay* o) { overlay_ = o; }

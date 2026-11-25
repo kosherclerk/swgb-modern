@@ -3,6 +3,7 @@
 #include "presenter.h"
 #include "window.h"
 #include "renderer.h"
+#include "video.h"
 #include <algorithm>
 #include <string.h>
 #include <climits>
@@ -698,6 +699,8 @@ HRESULT DDraw::SetMode(DWORD w, DWORD h, DWORD bpp) {
     State().modeBpp = (int)bpp;
     Window::SetGameSize((int)w, (int)h);
     Presenter::Get().Start(State().hwnd);
+    // First mode set happens during startup, before the menu: play the intros.
+    Video::PlayIntros(State().hwnd);
     return DD_OK;
 }
 HRESULT DDraw::SetDisplayMode(DWORD w, DWORD h, DWORD bpp) { return SetMode(w, h, bpp); }

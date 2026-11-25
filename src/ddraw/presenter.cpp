@@ -11,6 +11,7 @@ Presenter& Presenter::Get() {
     static Presenter* p = [] {
         auto* x = new Presenter();
         InitializeCriticalSection(&x->vpLock_);
+        InitializeCriticalSection(&x->ovLock_);
         return x;
     }();
     return *p;
@@ -76,6 +77,28 @@ void Presenter::GameSize(int& w, int& h) {
 }
 
 const char* Presenter::BackendName() { return backendName_; }
+
+void Presenter::SetOverlay(const uint32_t* px, int w, int h, float x, float y, float rw, float rh, bool hideFrame, int y0, int y1) {
+    EnterCriticalSection(&ovLock_);
+    Overlay& o = ovShared_;
+    bool resized = o.width != w || o.height != h;
+    if (resized) o.pixels.assign((size_t)w * h, 0);
+    if (y0 < 0 || resized) { y0 = 0; y1 = h; }
+    if (y1 > y0) memcpy(o.pixels.data() + (size_t)y0 * w, px + (size_t)y0 * w, (size_t)(y1 - y0) * w * 4);
+    if (!o.visible || ovChanged_ == false) { o.dirtyY0 = y0; o.dirtyY1 = y1; }
+    else { o.dirtyY0 = std::min(o.dirtyY0, y0); o.dirtyY1 = std::max(o.dirtyY1, y1); }
+    o.visible = true; o.width = w; o.height = h; o.x = x; o.y = y; o.w = rw; o.h = rh; o.hideFrame = hideFrame;
+    ovChanged_ = true;
+    LeaveCriticalSection(&ovLock_);
+    if (frameEvent_) SetEvent(frameEvent_);
+}
+
+void Presenter::ClearOverlay() {
+    EnterCriticalSection(&ovLock_);
+    if (ovShared_.visible) { ovShared_.visible = false; ovChanged_ = true; }
+    LeaveCriticalSection(&ovLock_);
+    if (frameEvent_) SetEvent(frameEvent_);
+}
 
 Viewport Presenter::ComputeViewport(int cw, int ch, int gw, int gh) {
     ScaleMode mode = (ScaleMode)scaleMode_;
@@ -213,6 +236,20 @@ void Presenter::Run() {
         bool have = SnapshotPrimary(frame);
         InterlockedExchange(&pendingFlip_, 0);
         SetEvent(consumedEvent_);
+        if (!have && r) {
+            // No primary surface yet (e.g. intro videos during startup): show
+            // the overlay on a black frame of the current mode's size.
+            EnterCriticalSection(&ovLock_);
+            bool ov = ovShared_.visible || ovRender_.visible;
+            LeaveCriticalSection(&ovLock_);
+            if (ov) {
+                int w = std::max(1, State().modeW), h = std::max(1, State().modeH);
+                if (frame.width != w || frame.height != h) { frame.width = w; frame.height = h; frame.pixels.assign((size_t)w * h, 0); }
+                memset(frame.palette, 0, sizeof(frame.palette));
+                frame.MarkAll();
+                have = true;
+            }
+        }
         if (!have || !r) continue;
 
         RECT rc;
@@ -225,7 +262,32 @@ void Presenter::Run() {
         }
         // Nothing new and nothing moved: keep the last presented image.
         // (The engine re-blits identical frames ~3x per real change.)
-        if (!frame.Dirty() && !resized) { skipped++; continue; }
+        // pick up overlay changes (copied so producers never block on the GPU)
+        bool ovDirty = false;
+        EnterCriticalSection(&ovLock_);
+        if (ovChanged_) {
+            Overlay& s = ovShared_;
+            bool sizeChange = s.width != ovRender_.width || s.height != ovRender_.height;
+            if (sizeChange) ovRender_.pixels = s.pixels;
+            else if (s.dirtyY1 > s.dirtyY0)
+                memcpy(ovRender_.pixels.data() + (size_t)s.dirtyY0 * s.width, s.pixels.data() + (size_t)s.dirtyY0 * s.width,
+                       (size_t)(s.dirtyY1 - s.dirtyY0) * s.width * 4);
+            ovRender_.visible = s.visible; ovRender_.width = s.width; ovRender_.height = s.height;
+            ovRender_.x = s.x; ovRender_.y = s.y; ovRender_.w = s.w; ovRender_.h = s.h; ovRender_.hideFrame = s.hideFrame;
+            ovRender_.dirtyY0 = sizeChange ? 0 : s.dirtyY0;
+            ovRender_.dirtyY1 = sizeChange ? s.height : s.dirtyY1;
+            s.dirtyY0 = s.dirtyY1 = 0;
+            ovChanged_ = false;
+            ovDirty = true;
+        } else {
+            ovRender_.dirtyY0 = ovRender_.dirtyY1 = 0;
+        }
+        LeaveCriticalSection(&ovLock_);
+        if (forceFull && ovRender_.visible) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
+        r->SetOverlay(&ovRender_);
+        bool skip = !frame.Dirty() && !resized && !ovDirty && r->SkipIdenticalFrames();
+        if (skip) skipped++;
+        else {
         lastCw = rc.right; lastCh = rc.bottom;
         Viewport vp = ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
         EnterCriticalSection(&vpLock_);
@@ -257,6 +319,9 @@ void Presenter::Run() {
             fpsTick = GetTickCount();
             if (CfgBool("Debug", "ThreadReport", false)) LogThreadReport();
         }
+        } // !skip
+        // Pacing applies to skipped frames too: the game loop waits on this
+        // thread (Flip/Blt back-pressure), so it keeps running at display rate.
         if (maxFps > 0 && timer) {
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
