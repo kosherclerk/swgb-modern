@@ -67,7 +67,15 @@ bool LogEnabled() {
         if (g_logState) {
             InitializeCriticalSection(&g_logLock);
             std::wstring p = GameDir() + L"\\SWGBModern.log";
-            g_log = _wfopen(p.c_str(), L"w");
+            // ddraw.dll starts a fresh log; dsound.dll appends. Shared append-mode
+            // handles keep both DLLs' lines intact.
+            wchar_t self[MAX_PATH] = L"";
+            HMODULE hm = nullptr;
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCWSTR)&LogEnabled, &hm);
+            GetModuleFileNameW(hm, self, MAX_PATH);
+            if (wcsstr(_wcslwr(self), L"ddraw.dll")) { FILE* t = _wfopen(p.c_str(), L"w"); if (t) fclose(t); }
+            g_log = _wfsopen(p.c_str(), L"a", _SH_DENYNO);
             if (!g_log) g_logState = 0;
         }
     }
