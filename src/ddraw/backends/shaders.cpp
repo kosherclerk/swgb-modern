@@ -132,9 +132,9 @@ float4 PSScale(VSOut i) : SV_Target {
 )HLSL";
 
 // GLSL: shared by OpenGL (#version 330) and Vulkan (#version 450, compiled to
-// SPIR-V at build time). VULKAN is defined for the latter.
+// SPIR-V at build time). SWGBM_VK is defined for the latter.
 const char* g_glslVertex = R"GLSL(
-#ifdef VULKAN
+#ifdef SWGBM_VK
 layout(location = 0) out vec2 vUV;
 #define VID gl_VertexIndex
 #else
@@ -143,7 +143,7 @@ out vec2 vUV;
 #endif
 void main() {
     vec2 uv = vec2((VID << 1) & 2, VID & 2);
-#ifdef VULKAN
+#ifdef SWGBM_VK
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 #else
     gl_Position = vec4(uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);
@@ -153,7 +153,7 @@ void main() {
 )GLSL";
 
 const char* g_glslPaletteFrag = R"GLSL(
-#ifdef VULKAN
+#ifdef SWGBM_VK
 layout(set = 0, binding = 0) uniform usampler2D IndexTex;
 layout(set = 0, binding = 1) uniform sampler2D PaletteTex;
 layout(location = 0) out vec4 outColor;
@@ -172,7 +172,7 @@ void main() {
 )GLSL";
 
 const char* g_glslScaleFrag = R"GLSL(
-#ifdef VULKAN
+#ifdef SWGBM_VK
 layout(set = 0, binding = 0) uniform sampler2D FrameTex;
 layout(push_constant) uniform PC { vec4 srcSize; vec4 dstSize; int filterMode; float sharpness; vec2 pad; } pc;
 #define srcSize pc.srcSize
@@ -193,7 +193,7 @@ out vec4 outColor;
 
 vec3 Px(vec2 p) {
     ivec2 q = clamp(ivec2(p), ivec2(0), ivec2(srcSize.xy) - 1);
-#ifdef VULKAN
+#ifdef SWGBM_VK
     return texelFetch(FrameTex, q, 0).rgb;
 #else
     // GL frame texture is stored bottom-up (rendered by pass 1)
@@ -201,7 +201,7 @@ vec3 Px(vec2 p) {
 #endif
 }
 vec3 Lin(vec2 uv) {
-#ifdef VULKAN
+#ifdef SWGBM_VK
     return textureLod(FrameTex, uv, 0.0).rgb;
 #else
     return textureLod(FrameTex, vec2(uv.x, 1.0 - uv.y), 0.0).rgb;
