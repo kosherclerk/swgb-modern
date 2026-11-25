@@ -21,7 +21,10 @@ public sealed class LauncherPrefs
     public bool SkipIntro { get; set; } = true;
     public bool CheckUpdates { get; set; } = true;
     public string ResolutionMode { get; set; } = "auto";   // auto | classic | custom
-    public int UiScale { get; set; }                        // 0 = auto
+    public int NativeW { get; set; }                        // 0 = detect
+    public int NativeH { get; set; }
+    public double Scale { get; set; }                       // 0 = closest to original
+    public string? Profile { get; set; }                    // faithful | enhanced | custom (null = first run)
 
     private static string PathOf => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SWGBModern", "launcher.json");
@@ -49,7 +52,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
         On(n);
-        if (n is nameof(ResolutionMode) or nameof(UiScale) or nameof(CustomWidth) or nameof(CustomHeight)) On(nameof(ResolutionSummary));
+        if (n is nameof(ResolutionMode) or nameof(SelectedScale) or nameof(CustomWidth) or nameof(CustomHeight)) On(nameof(ResolutionSummary));
         return true;
     }
 
@@ -73,9 +76,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     };
     public List<Choice> ResolutionModes { get; } = new()
     {
-        new("auto", "Widescreen, scaled to monitor"), new("custom", "Widescreen, custom size"), new("classic", "Original (4:3, as the game shipped)"),
+        new("auto", "Widescreen: native resolution + scale"), new("custom", "Widescreen: custom size"), new("classic", "Original 4:3 modes (as the game shipped)"),
     };
-    public List<Choice> UiScales { get; } = new() { new("0", "Auto"), new("1", "1x"), new("2", "2x"), new("3", "3x"), new("4", "4x") };
+    public List<Choice> NativeModes { get; } = SystemInfo.MonitorModes().Select(m => new Choice($"{m.W}x{m.H}", $"{m.W} x {m.H}"))
+        .Append(new Choice("custom", "Other...")).ToList();
+    public ObservableCollection<SystemInfo.ScaleOption> ScaleChoices { get; } = new();
     public List<Choice> PanelStyles { get; } = new() { new("stretch", "Stretched (wide info panel)"), new("center", "Centred original panel") };
     public List<Choice> Resamplers { get; } = new() { new("sinc", "Windowed sinc (best)"), new("cubic", "Cubic"), new("linear", "Linear (classic)") };
     public ObservableCollection<GameExecutable> Games { get; } = new();
@@ -112,8 +117,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ResolutionMode { get => _resolutionMode; set { Set(ref _resolutionMode, value); On(nameof(IsCustomResolution)); On(nameof(IsScaledResolution)); } }
     public bool IsCustomResolution => ResolutionMode == "custom";
     public bool IsScaledResolution => ResolutionMode == "auto";
-    private string _uiScale = "0";
-    public string UiScale { get => _uiScale; set => Set(ref _uiScale, value); }
+    private string _nativeRes = "";
+    public string NativeRes { get => _nativeRes; set { if (Set(ref _nativeRes, value)) { On(nameof(IsCustomNative)); RebuildScales(); } } }
+    public bool IsCustomNative => NativeRes == "custom";
+    private int _nativeW = 3840, _nativeH = 2160;
+    public int NativeW { get => _nativeW; set { if (Set(ref _nativeW, value)) RebuildScales(); } }
+    public int NativeH { get => _nativeH; set { if (Set(ref _nativeH, value)) RebuildScales(); } }
+    private SystemInfo.ScaleOption? _scale;
+    public SystemInfo.ScaleOption? SelectedScale { get => _scale; set { Set(ref _scale, value); On(nameof(ResolutionSummary)); } }
+
+    private (int W, int H) Native()
+    {
+        if (NativeRes != "custom" && NativeRes.Split('x') is [var a, var b] && int.TryParse(a, out var w) && int.TryParse(b, out var h)) return (w, h);
+        return (Math.Max(1280, NativeW), Math.Max(720, NativeH));
+    }
+
+    private void RebuildScales()
+    {
+        double want = SelectedScale?.Scale ?? Prefs.Scale;
+        var (w, h) = Native();
+        ScaleChoices.Clear();
+        foreach (var o in SystemInfo.ScaleOptions(w, h)) ScaleChoices.Add(o);
+        SelectedScale = ScaleChoices.FirstOrDefault(o => o.Scale == want) ?? ScaleChoices.FirstOrDefault(o => o.ClosestToOriginal) ?? ScaleChoices.FirstOrDefault();
+    }
     private int _customWidth = 1920, _customHeight = 1080;
     public int CustomWidth { get => _customWidth; set => Set(ref _customWidth, value); }
     public int CustomHeight { get => _customHeight; set => Set(ref _customHeight, value); }
@@ -123,7 +149,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public (int W, int H) EffectiveResolution()
     {
         if (ResolutionMode == "custom") return (Math.Max(1280, CustomWidth), Math.Max(720, CustomHeight));
-        var r = SystemInfo.ResolutionForScale(int.TryParse(UiScale, out var s) ? s : 0);
+        if (SelectedScale is { } o) return (o.W, o.H);
+        var r = SystemInfo.ResolutionForScale(0);
         return (r.W, r.H);
     }
 
@@ -134,8 +161,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var (mw, mh, hz) = SystemInfo.PrimaryMonitor();
             if (ResolutionMode == "classic") return $"Menus and game use the original 800x600 / 1024x768 / 1280x1024 modes, scaled to your {mw}x{mh} screen.";
             var (w, h) = EffectiveResolution();
-            string scale = mw % w == 0 && mh % h == 0 ? $"exact {mw / w}x pixel scaling" : "non-integer scaling (use Sharp or xBR filter)";
-            return $"In-game resolution {w}x{h} on your {mw}x{mh} @ {hz} Hz monitor: {scale}. Menus stay 800x600 (scaled).";
+            string scale = mw % w == 0 && mh % h == 0 && mw / w == mh / h ? $"exact {mw / w}x pixel scaling" : "non-integer scaling (use Sharp or xBR filter)";
+            return $"In-game {w}x{h}, shown on your {mw}x{mh} @ {hz} Hz desktop with {scale}. The interface is drawn at a fixed pixel size, " +
+                   "so a lower in-game resolution means a larger interface. Menus are 800x600 (scaled).";
         }
     }
 
@@ -152,6 +180,44 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool SkipIntro { get => Prefs.SkipIntro; set { Prefs.SkipIntro = value; On(); } }
     public bool CheckUpdates { get => Prefs.CheckUpdates; set { Prefs.CheckUpdates = value; On(); } }
 
+    // ---------------------------------------------------------------- components
+    // Core components keep the original look; enhancements change it and are
+    // optional (see the Components tab and the Faithful / Enhanced profiles).
+    public bool EnhWidescreen
+    {
+        get => ResolutionMode != "classic";
+        set { ResolutionMode = value ? (ResolutionMode == "classic" ? "auto" : ResolutionMode) : "classic"; On(); }
+    }
+    public bool EnhSmooth { get => GameFps > 20; set { GameFps = value ? 60 : 20; MinimapMs = value ? 100 : 333; On(); } }
+    public bool EnhFilter { get => Filter != "nearest"; set { Filter = value ? "xbr" : "nearest"; On(); } }
+    private bool _hdText, _hdMenus, _hdVideos, _playIntro = true;
+    public bool HdText { get => _hdText; set => Set(ref _hdText, value); }
+    public bool HdMenus { get => _hdMenus; set => Set(ref _hdMenus, value); }
+    public bool HdVideos { get => _hdVideos; set => Set(ref _hdVideos, value); }
+    public bool PlayIntro { get => _playIntro; set => Set(ref _playIntro, value); }
+    private string _hdStatus = "";
+    public string HdStatus { get => _hdStatus; set => Set(ref _hdStatus, value); }
+
+    public void ApplyProfile(string name)
+    {
+        bool enhanced = name == "enhanced";
+        EnhWidescreen = enhanced;
+        EnhSmooth = enhanced;
+        Filter = enhanced ? "xbr" : "nearest";
+        HdText = enhanced;
+        HdMenus = enhanced;
+        HdVideos = enhanced;
+        PanelStyle = "stretch";
+        Prefs.Profile = name;
+        foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
+    }
+    public string ProfileText => Prefs.Profile switch
+    {
+        "faithful" => "Faithful: original look, only compatibility fixes",
+        "enhanced" => "Enhanced: widescreen, smooth rendering, HD text, menus and videos",
+        _ => "Custom",
+    };
+
     // audio
     private bool _audioEnabled = true, _limiter = true;
     public bool AudioEnabled { get => _audioEnabled; set => Set(ref _audioEnabled, value); }
@@ -166,7 +232,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         GameDir = GameLocator.Find(Prefs.GameDir);
         ResolutionMode = Prefs.ResolutionMode;
-        UiScale = Prefs.UiScale.ToString();
+        var (cw, ch, _) = SystemInfo.PrimaryMonitor();
+        if (Prefs.NativeW > 0 && Prefs.NativeH > 0)
+        {
+            var key = $"{Prefs.NativeW}x{Prefs.NativeH}";
+            if (NativeModes.Any(m => m.Value == key)) NativeRes = key;
+            else { _nativeW = Prefs.NativeW; _nativeH = Prefs.NativeH; NativeRes = "custom"; }
+        }
+        else NativeRes = $"{cw}x{ch}";
     }
 
     private string IniPath => Path.Combine(GameDir ?? "", Installer.IniName);
@@ -199,6 +272,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Limiter = ini.GetBool("Audio", "Limiter", true);
         AudioEnabled = ini.GetBool("Audio", "Enabled", true);
         Log = ini.GetBool("Debug", "Log", false);
+        HdText = ini.GetBool("Enhancements", "HDText", false);
+        HdMenus = ini.GetBool("Enhancements", "HDMenus", false);
+        HdVideos = ini.GetBool("Enhancements", "HDVideos", false);
+        PlayIntro = ini.GetBool("Video", "PlayIntro", true);
+        foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
         CrashDumps = ini.GetBool("Debug", "CrashDumps", true);
         RefreshInstallState();
     }
@@ -223,7 +301,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Prefs.GameDir = GameDir;
         Prefs.LastGame = SelectedGame?.Variant.ToString() ?? Prefs.LastGame;
         Prefs.ResolutionMode = ResolutionMode;
-        Prefs.UiScale = int.TryParse(UiScale, out var s) ? s : 0;
+        var (nw, nh) = Native();
+        Prefs.NativeW = nw; Prefs.NativeH = nh;
+        Prefs.Scale = SelectedScale?.Scale ?? 0;
         Prefs.Save();
         if (GameDir == null) return;
         var ini = new IniFile(IniPath);
@@ -253,6 +333,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Audio", "LatencyMs", Latency);
         ini.Set("Audio", "Limiter", Limiter);
         ini.Set("Debug", "Log", Log);
+        ini.Set("Enhancements", "HDText", HdText);
+        ini.Set("Enhancements", "HDMenus", HdMenus);
+        ini.Set("Enhancements", "HDVideos", HdVideos);
+        ini.Set("Video", "PlayIntro", PlayIntro);
         ini.Set("Debug", "CrashDumps", CrashDumps);
         ini.Save();
     }

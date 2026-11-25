@@ -276,6 +276,12 @@ LRESULT CALLBACK SubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         n++;
         if (GetTickCount() - t0 >= 5000) { LOG("WM_TIMER(1): %.1f/s", n * 1000.0 / (GetTickCount() - t0)); n = 0; t0 = GetTickCount(); }
     }
+    if (msg == WM_APP + 0x5157) { // settings changed on disk
+        g_windowed = CfgStr("Display", "Mode", "borderless") == "windowed";
+        g_lockCursor = CfgBool("Display", "LockCursor", true);
+        ApplyWindowMode();
+        return 0;
+    }
     switch (msg) {
     case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:

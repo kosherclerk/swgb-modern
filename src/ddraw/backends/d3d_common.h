@@ -12,7 +12,8 @@ struct ShaderBlobs {
     ID3DBlob* vs = nullptr;
     ID3DBlob* psPal = nullptr;
     ID3DBlob* psScale = nullptr;
-    ~ShaderBlobs() { SafeRelease(vs); SafeRelease(psPal); SafeRelease(psScale); }
+    ID3DBlob* psOverlay = nullptr;
+    ~ShaderBlobs() { SafeRelease(vs); SafeRelease(psPal); SafeRelease(psScale); SafeRelease(psOverlay); }
 };
 
 inline bool CompileHlsl(ShaderBlobs& out, const char* vsProfile, const char* psProfile) {
@@ -34,7 +35,8 @@ inline bool CompileHlsl(ShaderBlobs& out, const char* vsProfile, const char* psP
         SafeRelease(err);
         return true;
     };
-    return one("VSMain", vsProfile, &out.vs) && one("PSPalette", psProfile, &out.psPal) && one("PSScale", psProfile, &out.psScale);
+    return one("VSMain", vsProfile, &out.vs) && one("PSPalette", psProfile, &out.psPal) && one("PSScale", psProfile, &out.psScale) &&
+           one("PSOverlay", psProfile, &out.psOverlay);
 }
 
 inline ScaleConstants MakeScaleConstants(const Frame& f, const Viewport& vp, const PresentOptions& opt) {
@@ -53,6 +55,7 @@ inline ScaleConstants MakeScaleConstants(const Frame& f, const Viewport& vp, con
 struct DxgiSwap {
     IDXGISwapChain1* swap = nullptr;
     IDXGIFactory2* factory = nullptr;
+    HANDLE latencyWait = nullptr;   // frame-latency waitable object (flip model)
     HWND hwnd = nullptr;
     int w = 0, h = 0;
     UINT buffers = 2;
@@ -60,7 +63,13 @@ struct DxgiSwap {
     bool flipModel = true;
     UINT flags = 0;
 
-    ~DxgiSwap() { SafeRelease(swap); SafeRelease(factory); }
+    ~DxgiSwap() { if (latencyWait) CloseHandle(latencyWait); SafeRelease(swap); SafeRelease(factory); }
+    // The waitable object is a semaphore released once per completed present:
+    // consume it at most once per Present() or skipped frames would stall.
+    bool waited = false;
+    void WaitForNextFrame() {
+        if (latencyWait && !waited) { WaitForSingleObjectEx(latencyWait, 100, TRUE); waited = true; }
+    }
 
     bool CreateSwapChain(IUnknown* device, HWND wnd, UINT bufferCount = 2, bool requireFlip = false) {
         bool allowTearing = CfgBool("Display", "AllowTearing", true);
@@ -93,17 +102,30 @@ struct DxgiSwap {
         d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         d.Scaling = DXGI_SCALING_STRETCH;
         d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+        flags = (tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0) | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
         d.Flags = flags;
         HRESULT hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap);
         if (FAILED(hr)) { d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap); }
+        if (FAILED(hr)) { // older systems: no waitable object
+            d.Flags = flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+            d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap);
+        }
         if (FAILED(hr) && !requireFlip) {
             d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD; d.BufferCount = 1; d.Flags = flags = 0; tearing = false; flipModel = false;
             hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap);
         }
         if (FAILED(hr)) { LOG("DXGI CreateSwapChainForHwnd failed %08lx", hr); return false; }
         factory->MakeWindowAssociation(wnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-        LOG("DXGI swapchain %dx%d flip=%d tearing=%d", w, h, flipModel, tearing);
+        if (flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
+            IDXGISwapChain2* s2 = nullptr;
+            if (SUCCEEDED(swap->QueryInterface(IID_IDXGISwapChain2, (void**)&s2))) {
+                s2->SetMaximumFrameLatency(1);
+                latencyWait = s2->GetFrameLatencyWaitableObject();
+                s2->Release();
+            }
+        }
+        LOG("DXGI swapchain %dx%d flip=%d tearing=%d low-latency=%d", w, h, flipModel, tearing, latencyWait != nullptr);
         return true;
     }
     bool NeedsResize(int cw, int ch) const { return cw != w || ch != h; }
@@ -116,6 +138,7 @@ struct DxgiSwap {
     bool Present(bool vsync) {
         UINT pf = (!vsync && tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0;
         HRESULT hr = swap->Present(vsync ? 1 : 0, pf);
+        waited = false;
         if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) { LOG("DXGI device lost %08lx", hr); return false; }
         return true;
     }

@@ -149,11 +149,18 @@ struct DDState {
     DDSurface* primary = nullptr;
     std::vector<DDSurface*> surfaces;
     DDPalette* primaryPal = nullptr;
+    // change tracking for the presenter (guarded by lock)
+    int dirtyY0 = 0, dirtyY1 = 1 << 30;
+    bool paletteDirty = true;
+    volatile LONG version = 0;
 };
 DDState& State();
 
 // Copy the current front buffer (+palette) for presentation. Returns false if
 // there is nothing to show yet.
+// Copies changed rows of the front buffer (+palette) into `out` and sets its
+// dirty range. Returns false if there is no primary surface yet.
 bool SnapshotPrimary(struct Frame& out);
+void MarkPrimaryDirty(int y0, int y1, bool palette);
 
 } // namespace swgbm

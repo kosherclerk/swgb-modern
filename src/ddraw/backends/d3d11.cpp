@@ -11,6 +11,7 @@ public:
     const char* Name() const override { return "Direct3D 11"; }
     ~D3D11Renderer() override {
         if (ctx_) ctx_->ClearState();
+        SafeRelease(psOverlay_); SafeRelease(blend_); SafeRelease(ovSrv_); SafeRelease(ovTex_);
         SafeRelease(cb_); SafeRelease(samp_); SafeRelease(vs_); SafeRelease(psPal_); SafeRelease(psScale_);
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(palSrv_); SafeRelease(palTex_);
         SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_); SafeRelease(bbRtv_);
@@ -38,6 +39,13 @@ public:
         if (FAILED(dev_->CreateVertexShader(sb.vs->GetBufferPointer(), sb.vs->GetBufferSize(), nullptr, &vs_))) return false;
         if (FAILED(dev_->CreatePixelShader(sb.psPal->GetBufferPointer(), sb.psPal->GetBufferSize(), nullptr, &psPal_))) return false;
         if (FAILED(dev_->CreatePixelShader(sb.psScale->GetBufferPointer(), sb.psScale->GetBufferSize(), nullptr, &psScale_))) return false;
+        if (FAILED(dev_->CreatePixelShader(sb.psOverlay->GetBufferPointer(), sb.psOverlay->GetBufferSize(), nullptr, &psOverlay_))) return false;
+        D3D11_BLEND_DESC bdsc = {};
+        auto& rt = bdsc.RenderTarget[0];
+        rt.BlendEnable = TRUE; rt.SrcBlend = D3D11_BLEND_ONE; rt.DestBlend = D3D11_BLEND_INV_SRC_ALPHA; rt.BlendOp = D3D11_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D11_BLEND_ONE; rt.DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA; rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        dev_->CreateBlendState(&bdsc, &blend_);
 
         D3D11_SAMPLER_DESC sd = {};
         sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -74,13 +82,13 @@ public:
             dev_->CreateRenderTargetView(bb, nullptr, &bbRtv_);
             bb->Release();
         }
-        // upload
+        // upload only the rows that changed
         D3D11_MAPPED_SUBRESOURCE ms;
-        if (SUCCEEDED(ctx_->Map(idxTex_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
-            for (int y = 0; y < f.height; y++) memcpy((uint8_t*)ms.pData + y * ms.RowPitch, f.pixels.data() + (size_t)y * f.width, f.width);
-            ctx_->Unmap(idxTex_, 0);
+        if (f.dirtyY1 > f.dirtyY0) {
+            D3D11_BOX box = {0, (UINT)f.dirtyY0, 0, (UINT)f.width, (UINT)f.dirtyY1, 1};
+            ctx_->UpdateSubresource(idxTex_, 0, &box, f.pixels.data() + (size_t)f.dirtyY0 * f.width, f.width, 0);
         }
-        if (SUCCEEDED(ctx_->Map(palTex_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+        if (f.paletteChanged && SUCCEEDED(ctx_->Map(palTex_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
             memcpy(ms.pData, f.palette, 1024);
             ctx_->Unmap(palTex_, 0);
         }
@@ -111,17 +119,51 @@ public:
         ctx_->PSSetSamplers(0, 1, &samp_);
         ctx_->PSSetConstantBuffers(0, 1, &cb_);
         ctx_->PSSetShader(psScale_, nullptr, 0);
-        ctx_->Draw(3, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) ctx_->Draw(3, 0);
+        DrawOverlay(f, vp);
         return dxgi_.Present(opt.vsync);
     }
+    void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
 
 private:
+    void DrawOverlay(const Frame& f, const Viewport& vp) {
+        const Overlay* o = overlay_;
+        if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
+        bool full = false;
+        if (o->width != ovW_ || o->height != ovH_) {
+            SafeRelease(ovSrv_); SafeRelease(ovTex_);
+            D3D11_TEXTURE2D_DESC td = {};
+            td.Width = o->width; td.Height = o->height; td.MipLevels = 1; td.ArraySize = 1; td.SampleDesc.Count = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(dev_->CreateTexture2D(&td, nullptr, &ovTex_))) return;
+            dev_->CreateShaderResourceView(ovTex_, nullptr, &ovSrv_);
+            ovW_ = o->width; ovH_ = o->height; full = true;
+        }
+        int y0 = full ? 0 : o->dirtyY0, y1 = full ? o->height : o->dirtyY1;
+        if (y1 > y0) {
+            D3D11_BOX box = {0, (UINT)y0, 0, (UINT)o->width, (UINT)y1, 1};
+            ctx_->UpdateSubresource(ovTex_, 0, &box, o->pixels.data() + (size_t)y0 * o->width, o->width * 4, 0);
+        }
+        float x, y, w, h;
+        OverlayRect(*o, f, vp, x, y, w, h);
+        D3D11_VIEWPORT v = {x, y, w, h, 0, 1};
+        ctx_->RSSetViewports(1, &v);
+        float bf[4] = {0, 0, 0, 0};
+        ctx_->OMSetBlendState(blend_, bf, 0xffffffff);
+        ctx_->PSSetShaderResources(3, 1, &ovSrv_);
+        ctx_->PSSetShader(psOverlay_, nullptr, 0);
+        ctx_->Draw(3, 0);
+        ctx_->OMSetBlendState(nullptr, bf, 0xffffffff);
+        ID3D11ShaderResourceView* nul = nullptr;
+        ctx_->PSSetShaderResources(3, 1, &nul);
+    }
+
     bool CreateFrameResources(int w, int h) {
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_);
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.SampleDesc.Count = 1;
-        td.Format = DXGI_FORMAT_R8_UINT; td.Usage = D3D11_USAGE_DYNAMIC;
-        td.BindFlags = D3D11_BIND_SHADER_RESOURCE; td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        td.Format = DXGI_FORMAT_R8_UINT; td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE; td.CPUAccessFlags = 0;
         if (FAILED(dev_->CreateTexture2D(&td, nullptr, &idxTex_))) return false;
         dev_->CreateShaderResourceView(idxTex_, nullptr, &idxSrv_);
         td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.Usage = D3D11_USAGE_DEFAULT; td.CPUAccessFlags = 0;
@@ -142,6 +184,11 @@ private:
     ID3D11VertexShader* vs_ = nullptr;
     ID3D11PixelShader* psPal_ = nullptr;
     ID3D11PixelShader* psScale_ = nullptr;
+    ID3D11PixelShader* psOverlay_ = nullptr;
+    ID3D11BlendState* blend_ = nullptr;
+    ID3D11Texture2D* ovTex_ = nullptr;
+    ID3D11ShaderResourceView* ovSrv_ = nullptr;
+    int ovW_ = 0, ovH_ = 0;
     ID3D11SamplerState* samp_ = nullptr;
     ID3D11Buffer* cb_ = nullptr;
     ID3D11Texture2D* idxTex_ = nullptr;

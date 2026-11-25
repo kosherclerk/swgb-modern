@@ -1,63 +1,119 @@
 // Software renderer: palette conversion + scaling on the CPU, shown with GDI.
-// Works everywhere (VMs, RDP, broken drivers). Nearest scaling is done by our
-// own integer-exact scaler; smooth filters use GDI HALFTONE stretching.
+// Works everywhere (VMs, RDP, broken drivers).
+//  - Nearest: exact integer-mapped scaling straight into a viewport-sized DIB;
+//    only rows whose source rows changed are recomputed, in parallel.
+//  - Sharp (and xBR, which is GPU-only): nearest pre-scale to the largest
+//    integer factor, then GDI HALFTONE for the small remaining fraction.
+//  - Bilinear: game-size conversion, GDI HALFTONE stretch.
 #include "../renderer.h"
 #include <algorithm>
+#include <thread>
 
 namespace swgbm {
 namespace {
 
+struct Dib {
+    HDC dc = nullptr;
+    HBITMAP bmp = nullptr;
+    uint32_t* bits = nullptr;
+    int w = 0, h = 0;
+    ~Dib() { Free(); }
+    void Free() {
+        if (dc) DeleteDC(dc);
+        if (bmp) DeleteObject(bmp);
+        dc = nullptr; bmp = nullptr; bits = nullptr; w = h = 0;
+    }
+    bool Ensure(int nw, int nh) {
+        if (nw == w && nh == h && bits) return false;
+        Free();
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = nw;
+        bi.bmiHeader.biHeight = -nh;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        dc = CreateCompatibleDC(nullptr);
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0);
+        if (bmp) SelectObject(dc, bmp);
+        w = nw; h = nh;
+        return true;
+    }
+};
+
+template <class F> void ParallelRows(int n, F fn) {
+    unsigned hw = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+    if (n < 256 || hw == 1) { fn(0, n); return; }
+    std::vector<std::thread> t;
+    int chunk = (n + (int)hw - 1) / (int)hw;
+    for (unsigned i = 0; i < hw; i++) {
+        int a = (int)i * chunk, b = std::min(n, a + chunk);
+        if (a < b) t.emplace_back([=] { fn(a, b); });
+    }
+    for (auto& th : t) th.join();
+}
+
 class SoftwareRenderer : public Renderer {
 public:
     const char* Name() const override { return "Software (GDI)"; }
-    bool Init(HWND hwnd) override {
-        hwnd_ = hwnd;
-        return true;
-    }
-    ~SoftwareRenderer() override {
-        if (memDC_) DeleteDC(memDC_);
-        if (dib_) DeleteObject(dib_);
-    }
+    bool Init(HWND hwnd) override { hwnd_ = hwnd; return true; }
+
     bool Present(const Frame& f, const Viewport& vp, int cw, int ch, const PresentOptions& opt) override {
-        bool nearest = opt.filter == Filter::Nearest || opt.filter == Filter::XBR || opt.filter == Filter::Smooth4x;
-        // Nearest: scale directly into a viewport-sized DIB (exact pixel mapping).
-        // Smooth: convert at game size and let GDI HALFTONE stretch.
-        int tw = nearest ? vp.w : f.width, th = nearest ? vp.h : f.height;
-        if (tw <= 0 || th <= 0) return true;
-        if (tw != dw_ || th != dh_) Recreate(tw, th);
-        if (!bits_) return false;
-        if (nearest) {
+        if (vp.w <= 0 || vp.h <= 0) return true;
+        Filter mode = opt.filter == Filter::Bilinear ? Filter::Bilinear : opt.filter == Filter::Nearest ? Filter::Nearest : Filter::Sharp;
+        int k = std::max(1, std::min(vp.w / f.width, vp.h / f.height)); // integer prescale (Sharp)
+        int tw, th;
+        if (mode == Filter::Nearest) { tw = vp.w; th = vp.h; }
+        else if (mode == Filter::Sharp) { tw = f.width * k; th = f.height * k; }
+        else { tw = f.width; th = f.height; }
+        bool full = buf_.Ensure(tw, th) || f.paletteChanged || mode != lastMode_ || f.width != lastFw_ || f.height != lastFh_;
+        lastMode_ = mode; lastFw_ = f.width; lastFh_ = f.height;
+        if (!buf_.bits) return false;
+
+        // map destination rows/cols to source rows/cols (nearest, exact)
+        if ((int)ymap_.size() != th || full) {
+            ymap_.resize(th);
             xmap_.resize(tw);
+            for (int y = 0; y < th; y++) ymap_[y] = (int)((int64_t)y * f.height / th);
             for (int x = 0; x < tw; x++) xmap_[x] = (int)((int64_t)x * f.width / tw);
-            int prevSy = -1;
-            for (int y = 0; y < th; y++) {
-                int sy = (int)((int64_t)y * f.height / th);
-                uint32_t* d = bits_ + (size_t)y * tw;
-                if (sy == prevSy) { memcpy(d, d - tw, tw * 4); continue; }
-                const uint8_t* s = f.pixels.data() + (size_t)sy * f.width;
-                for (int x = 0; x < tw; x++) d[x] = f.palette[s[xmap_[x]]];
-                prevSy = sy;
-            }
-        } else {
-            size_t n = (size_t)f.width * f.height;
-            for (size_t i = 0; i < n; i++) bits_[i] = f.palette[f.pixels[i]];
         }
+        int y0 = full ? 0 : f.dirtyY0, y1 = full ? f.height : f.dirtyY1;
+        if (y1 > y0) {
+            // destination rows whose source row is in [y0, y1)
+            int d0 = (int)(((int64_t)y0 * th + f.height - 1) / f.height), d1 = (int)(((int64_t)y1 * th + f.height - 1) / f.height);
+            d0 = std::max(0, std::min(th, d0)); d1 = std::max(d0, std::min(th, d1));
+            const uint8_t* px = f.pixels.data();
+            const uint32_t* pal = f.palette;
+            uint32_t* dst = buf_.bits;
+            int fw = f.width;
+            ParallelRows(d1 - d0, [&](int a, int b) {
+                for (int y = d0 + a; y < d0 + b; y++) {
+                    uint32_t* d = dst + (size_t)y * tw;
+                    if (y > d0 + a && ymap_[y] == ymap_[y - 1]) { memcpy(d, d - tw, (size_t)tw * 4); continue; }
+                    const uint8_t* s = px + (size_t)ymap_[y] * fw;
+                    for (int x = 0; x < tw; x++) d[x] = pal[s[xmap_[x]]];
+                }
+            });
+        }
+
         HDC dc = GetDC(hwnd_);
         if (!dc) return true;
-        // black borders
         HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
         RECT r;
         if (vp.y > 0) { r = {0, 0, cw, vp.y}; FillRect(dc, &r, black); }
         if (vp.y + vp.h < ch) { r = {0, vp.y + vp.h, cw, ch}; FillRect(dc, &r, black); }
         if (vp.x > 0) { r = {0, vp.y, vp.x, vp.y + vp.h}; FillRect(dc, &r, black); }
         if (vp.x + vp.w < cw) { r = {vp.x + vp.w, vp.y, cw, vp.y + vp.h}; FillRect(dc, &r, black); }
-        if (nearest) {
-            BitBlt(dc, vp.x, vp.y, vp.w, vp.h, memDC_, 0, 0, SRCCOPY);
+        if (overlay_ && overlay_->visible && overlay_->hideFrame) {
+            r = {vp.x, vp.y, vp.x + vp.w, vp.y + vp.h};
+            FillRect(dc, &r, black);
+        } else if (tw == vp.w && th == vp.h) {
+            BitBlt(dc, vp.x, vp.y, vp.w, vp.h, buf_.dc, 0, 0, SRCCOPY);
         } else {
             SetStretchBltMode(dc, HALFTONE);
             SetBrushOrgEx(dc, 0, 0, nullptr);
-            StretchBlt(dc, vp.x, vp.y, vp.w, vp.h, memDC_, 0, 0, f.width, f.height, SRCCOPY);
+            StretchBlt(dc, vp.x, vp.y, vp.w, vp.h, buf_.dc, 0, 0, tw, th, SRCCOPY);
         }
+        DrawOverlay(dc, f, vp);
         ReleaseDC(hwnd_, dc);
         if (opt.vsync) {
             static auto flush = (HRESULT(WINAPI*)())GetProcAddress(LoadLibraryW(L"dwmapi.dll"), "DwmFlush");
@@ -67,26 +123,25 @@ public:
     }
 
 private:
-    void Recreate(int w, int h) {
-        if (memDC_) DeleteDC(memDC_);
-        if (dib_) DeleteObject(dib_);
-        BITMAPINFO bi = {};
-        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        memDC_ = CreateCompatibleDC(nullptr);
-        dib_ = CreateDIBSection(memDC_, &bi, DIB_RGB_COLORS, (void**)&bits_, nullptr, 0);
-        if (dib_) SelectObject(memDC_, dib_);
-        dw_ = w; dh_ = h;
+    void DrawOverlay(HDC dc, const Frame& f, const Viewport& vp) {
+        const Overlay* o = overlay_;
+        if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
+        bool full = ov_.Ensure(o->width, o->height);
+        int y0 = full ? 0 : o->dirtyY0, y1 = full ? o->height : o->dirtyY1;
+        if (y1 > y0) memcpy(ov_.bits + (size_t)y0 * o->width, o->pixels.data() + (size_t)y0 * o->width, (size_t)(y1 - y0) * o->width * 4);
+        float x, y, w, h;
+        OverlayRect(*o, f, vp, x, y, w, h);
+        BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        SetStretchBltMode(dc, HALFTONE);
+        GdiAlphaBlend(dc, (int)x, (int)y, (int)(w + 0.5f), (int)(h + 0.5f), ov_.dc, 0, 0, o->width, o->height, bf);
     }
+
+    Dib ov_;
     HWND hwnd_ = nullptr;
-    HDC memDC_ = nullptr;
-    HBITMAP dib_ = nullptr;
-    uint32_t* bits_ = nullptr;
-    int dw_ = 0, dh_ = 0;
-    std::vector<int> xmap_;
+    Dib buf_;
+    std::vector<int> xmap_, ymap_;
+    Filter lastMode_ = Filter::Nearest;
+    int lastFw_ = 0, lastFh_ = 0;
 };
 
 } // namespace

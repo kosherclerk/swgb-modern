@@ -24,6 +24,9 @@ private:
     void Run();
     std::unique_ptr<Renderer> CreateBackend();
     Viewport ComputeViewport(int cw, int ch, int gw, int gh);
+    void LoadOptions(PresentOptions& opt, int& maxFps);
+    volatile LONG scaleMode_ = 0;        // ScaleMode, reloaded live
+    std::string rendererName_;
 
     HWND hwnd_ = nullptr;
     HANDLE thread_ = nullptr;

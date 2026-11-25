@@ -20,7 +20,7 @@ namespace {
     X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) \
     X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D) X(PFNGLACTIVETEXTUREPROC, glActiveTexture) \
     X(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers) X(PFNGLDELETEPROGRAMPROC, glDeleteProgram) \
-    X(PFNGLDELETESHADERPROC, glDeleteShader)
+    X(PFNGLDELETESHADERPROC, glDeleteShader) X(PFNGLBLENDFUNCSEPARATEPROC, glBlendFuncSeparate)
 
 #define DECL(T, N) T N = nullptr;
 GLFUNCS(DECL)
@@ -66,7 +66,10 @@ public:
 
         progPal_ = Program(g_glslPaletteFrag);
         progScale_ = Program(g_glslScaleFrag);
-        if (!progPal_ || !progScale_) return false;
+        progOverlay_ = Program(g_glslOverlayFrag);
+        if (!progPal_ || !progScale_ || !progOverlay_) return false;
+        glUseProgram(progOverlay_);
+        glUniform1i(glGetUniformLocation(progOverlay_, "OverlayTex"), 0);
         glGenVertexArrays(1, &vao_);
         glGenTextures(1, &palTex_);
         glBindTexture(GL_TEXTURE_2D, palTex_);
@@ -93,10 +96,12 @@ public:
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, idxTex_);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f.width, f.height, GL_RED_INTEGER, GL_UNSIGNED_BYTE, f.pixels.data());
+        if (f.dirtyY1 > f.dirtyY0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, f.dirtyY0, f.width, f.dirtyY1 - f.dirtyY0, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                            f.pixels.data() + (size_t)f.dirtyY0 * f.width);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, palTex_);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_BGRA, GL_UNSIGNED_BYTE, f.palette);
+        if (f.paletteChanged) glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_BGRA, GL_UNSIGNED_BYTE, f.palette);
         glBindVertexArray(vao_);
         glDisable(GL_BLEND);
         glDisable(GL_DEPTH_TEST);
@@ -119,7 +124,8 @@ public:
         glUniform4f(uDst_, (float)vp.w, (float)vp.h, 1.0f / vp.w, 1.0f / vp.h);
         glUniform1i(uFilter_, (int)opt.filter);
         glUniform1f(uSharp_, opt.sharpness);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) glDrawArrays(GL_TRIANGLES, 0, 3);
+        DrawOverlay(f, vp, ch);
         SwapBuffers(dc_);
         GLenum e = glGetError();
         if (e != GL_NO_ERROR) LOG("GL error %04x", e);
@@ -127,6 +133,31 @@ public:
     }
 
 private:
+    void DrawOverlay(const Frame& f, const Viewport& vp, int ch) {
+        const Overlay* o = overlay_;
+        if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
+        glActiveTexture(GL_TEXTURE0);
+        bool full = false;
+        if (!ovTex_ || o->width != ovW_ || o->height != ovH_) {
+            if (!ovTex_) glGenTextures(1, &ovTex_);
+            glBindTexture(GL_TEXTURE_2D, ovTex_);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, o->width, o->height, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+            SetParams(GL_LINEAR);
+            ovW_ = o->width; ovH_ = o->height; full = true;
+        }
+        glBindTexture(GL_TEXTURE_2D, ovTex_);
+        int y0 = full ? 0 : o->dirtyY0, y1 = full ? o->height : o->dirtyY1;
+        if (y1 > y0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, o->width, y1 - y0, GL_BGRA, GL_UNSIGNED_BYTE, o->pixels.data() + (size_t)y0 * o->width);
+        float x, y, w, h;
+        OverlayRect(*o, f, vp, x, y, w, h);
+        glViewport((GLint)x, (GLint)(ch - y - h), (GLsizei)(w + 0.5f), (GLsizei)(h + 0.5f));
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(progOverlay_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDisable(GL_BLEND);
+    }
     static void SetParams(GLint filt) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filt);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt);
@@ -180,6 +211,8 @@ private:
     HGLRC rc_ = nullptr;
     PFNWGLSWAPINTERVALEXTPROC swapInterval_ = nullptr;
     int lastVsync_ = -1;
+    GLuint progOverlay_ = 0, ovTex_ = 0;
+    int ovW_ = 0, ovH_ = 0;
     GLuint progPal_ = 0, progScale_ = 0, vao_ = 0, fbo_ = 0, idxTex_ = 0, palTex_ = 0, frameTex_ = 0;
     GLint uPalH_ = -1, uSrc_ = -1, uDst_ = -1, uFilter_ = -1, uSharp_ = -1;
     int fw_ = 0, fh_ = 0;

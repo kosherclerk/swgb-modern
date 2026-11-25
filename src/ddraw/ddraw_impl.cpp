@@ -5,6 +5,7 @@
 #include "renderer.h"
 #include <algorithm>
 #include <string.h>
+#include <climits>
 
 namespace swgbm {
 
@@ -23,6 +24,15 @@ struct Lock_ {
 };
 
 static void NotifyPrimaryChanged(bool flip) { Presenter::Get().FrameReady(flip); }
+
+void MarkPrimaryDirty(int y0, int y1, bool palette) {
+    auto& st = State(); // caller may or may not hold the (recursive) lock
+    EnterCriticalSection(&st.lock);
+    if (y1 > y0) { st.dirtyY0 = std::min(st.dirtyY0, y0); st.dirtyY1 = std::max(st.dirtyY1, y1); }
+    if (palette) st.paletteDirty = true;
+    InterlockedIncrement(&st.version);
+    LeaveCriticalSection(&st.lock);
+}
 
 // Debug: heuristic stack scan for return addresses into the game's code.
 static void LogStackScan(const char* tag) {
@@ -85,7 +95,7 @@ HRESULT DDPalette::SetEntries(DWORD, DWORD base, DWORD n, LPPALETTEENTRY in) {
         for (auto* s : State().surfaces)
             if (s->pal_ == this || (!s->pal_ && isPrimary)) s->SyncColorTable();
     }
-    if (isPrimary) NotifyPrimaryChanged(false);
+    if (isPrimary) { MarkPrimaryDirty(0, 0, true); NotifyPrimaryChanged(false); }
     return DD_OK;
 }
 
@@ -295,6 +305,7 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
     if (IsPrimary()) {
         bool frame = (int64_t)(d.right - d.left) * (d.bottom - d.top) * 2 >= (int64_t)w_ * h_;
         if (h_ > 600) LogStackScan(frame ? "blt-frame" : "blt-partial");
+        MarkPrimaryDirty(d.top, d.bottom, false);
         NotifyPrimaryChanged(frame);
     }
     return DD_OK;
@@ -340,6 +351,7 @@ HRESULT DDSurface::Flip(LPDIRECTDRAWSURFACE, DWORD) {
         for (size_t i = 0; i + 1 < chain_.size(); i++) chain_[i]->SwapContents(chain_[i + 1]);
         for (auto* s : chain_) s->SyncColorTable();
     }
+    MarkPrimaryDirty(0, h_, false);
     NotifyPrimaryChanged(true);
     return DD_OK;
 }
@@ -434,7 +446,7 @@ HRESULT DDSurface::Lock(LPRECT r, LPDDSURFACEDESC d, DWORD, HANDLE) {
 HRESULT DDSurface::ReleaseDC(HDC) {
     GdiFlush();
     if (dcOut_ > 0) dcOut_--;
-    if (IsPrimary()) NotifyPrimaryChanged(false);
+    if (IsPrimary()) { MarkPrimaryDirty(0, h_, false); NotifyPrimaryChanged(false); }
     return DD_OK;
 }
 HRESULT DDSurface::Restore() { return DD_OK; }
@@ -465,11 +477,11 @@ HRESULT DDSurface::SetPalette(LPDIRECTDRAWPALETTE p) {
             SyncColorTable();
         }
     }
-    if (IsPrimary()) NotifyPrimaryChanged(false);
+    if (IsPrimary()) { MarkPrimaryDirty(0, h_, true); NotifyPrimaryChanged(false); }
     return DD_OK;
 }
 HRESULT DDSurface::Unlock(LPVOID) {
-    if (IsPrimary()) NotifyPrimaryChanged(false);
+    if (IsPrimary()) { MarkPrimaryDirty(0, h_, false); NotifyPrimaryChanged(false); }
     return DD_OK;
 }
 HRESULT DDSurface::UpdateOverlay(LPRECT, LPDIRECTDRAWSURFACE, LPRECT, DWORD, LPDDOVERLAYFX) { return DDERR_NOTAOVERLAYSURFACE; }
@@ -478,19 +490,35 @@ HRESULT DDSurface::UpdateOverlayZOrder(DWORD, LPDIRECTDRAWSURFACE) { return DDER
 
 bool SnapshotPrimary(Frame& out) {
     Lock_ l;
-    DDSurface* p = State().primary;
+    auto& st = State();
+    DDSurface* p = st.primary;
     if (!p || !p->bits_) return false;
+    bool resized = out.width != p->w_ || out.height != p->h_;
     out.width = p->w_;
     out.height = p->h_;
-    out.pixels.resize((size_t)p->w_ * p->h_);
-    for (int y = 0; y < p->h_; y++) memcpy(out.pixels.data() + (size_t)y * p->w_, p->bits_ + (size_t)y * p->pitch_, p->w_);
-    DDPalette* pal = State().primaryPal;
-    if (pal) {
-        for (int i = 0; i < 256; i++)
-            out.palette[i] = (pal->entries_[i].peRed << 16) | (pal->entries_[i].peGreen << 8) | pal->entries_[i].peBlue;
-    } else {
-        for (int i = 0; i < 256; i++) out.palette[i] = i * 0x010101;
+    int y0 = std::max(0, st.dirtyY0), y1 = std::min(p->h_, st.dirtyY1);
+    if (resized) { out.pixels.assign((size_t)p->w_ * p->h_, 0); y0 = 0; y1 = p->h_; }
+    // The engine re-blits the whole back buffer even when nothing moved, so
+    // compare with the previous snapshot and keep only rows that really changed.
+    int c0 = INT_MAX, c1 = 0;
+    for (int y = y0; y < y1; y++) {
+        uint8_t* dst = out.pixels.data() + (size_t)y * p->w_;
+        const uint8_t* src = p->bits_ + (size_t)y * p->pitch_;
+        if (!resized && memcmp(dst, src, p->w_) == 0) continue;
+        memcpy(dst, src, p->w_);
+        c0 = std::min(c0, y); c1 = y + 1;
     }
+    out.dirtyY0 = c0 < c1 ? c0 : 0;
+    out.dirtyY1 = c0 < c1 ? c1 : 0;
+    out.paletteChanged = st.paletteDirty || resized;
+    if (out.paletteChanged) {
+        DDPalette* pal = st.primaryPal;
+        for (int i = 0; i < 256; i++)
+            out.palette[i] = pal ? (pal->entries_[i].peRed << 16) | (pal->entries_[i].peGreen << 8) | pal->entries_[i].peBlue : i * 0x010101;
+    }
+    st.dirtyY0 = 1 << 30;
+    st.dirtyY1 = 0;
+    st.paletteDirty = false;
     return true;
 }
 
@@ -540,6 +568,7 @@ HRESULT DDraw::CreateSurface(LPDDSURFACEDESC d, LPDIRECTDRAWSURFACE* out, IUnkno
         {
             Lock_ l;
             st.primary = prim;
+            st.dirtyY0 = 0; st.dirtyY1 = 1 << 30; st.paletteDirty = true;
         }
         LOG("CreateSurface primary %dx%d backbuffers=%d caps=%08lx", st.modeW, st.modeH, backs, caps);
         *out = prim;

@@ -115,6 +115,13 @@ float3 XBR(float2 uv) {
     return lerp(res1, res2, step(c_df(E, res1), c_df(E, res2)));
 }
 
+// Overlay layer (videos, HD text, HD menus): premultiplied BGRA, drawn with
+// blend ONE / INV_SRC_ALPHA into the overlay's rectangle.
+Texture2D<float4> OverlayTex : register(t3);
+float4 PSOverlay(VSOut i) : SV_Target {
+    return OverlayTex.SampleLevel(LinearSamp, i.uv, 0);
+}
+
 float4 PSScale(VSOut i) : SV_Target {
     float2 uv = i.uv;
     if (filterMode == 0) return float4(Px(floor(uv * srcSize.xy)), 1);
@@ -292,6 +299,19 @@ void main() {
     vec2 f = (cd - clamp(cd, -rr, rr)) * scale + 0.5;
     outColor = vec4(Lin((fl + f) * srcSize.zw), 1.0);
 }
+)GLSL";
+
+const char* g_glslOverlayFrag = R"GLSL(
+#ifdef SWGBM_VK
+layout(set = 0, binding = 0) uniform sampler2D OverlayTex;
+layout(location = 0) in vec2 vUV;
+layout(location = 0) out vec4 outColor;
+#else
+uniform sampler2D OverlayTex;
+in vec2 vUV;
+out vec4 outColor;
+#endif
+void main() { outColor = textureLod(OverlayTex, vUV, 0.0); }
 )GLSL";
 
 } // namespace swgbm

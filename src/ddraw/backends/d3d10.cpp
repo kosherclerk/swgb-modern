@@ -11,6 +11,7 @@ public:
     const char* Name() const override { return "Direct3D 10.1"; }
     ~D3D10Renderer() override {
         if (dev_) dev_->ClearState();
+        SafeRelease(psOverlay_); SafeRelease(blend_); SafeRelease(ovSrv_); SafeRelease(ovTex_);
         SafeRelease(cb_); SafeRelease(samp_); SafeRelease(vs_); SafeRelease(psPal_); SafeRelease(psScale_);
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(palSrv_); SafeRelease(palTex_);
         SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_); SafeRelease(bbRtv_);
@@ -35,6 +36,12 @@ public:
         if (FAILED(dev_->CreateVertexShader(sb.vs->GetBufferPointer(), sb.vs->GetBufferSize(), &vs_))) return false;
         if (FAILED(dev_->CreatePixelShader(sb.psPal->GetBufferPointer(), sb.psPal->GetBufferSize(), &psPal_))) return false;
         if (FAILED(dev_->CreatePixelShader(sb.psScale->GetBufferPointer(), sb.psScale->GetBufferSize(), &psScale_))) return false;
+        if (FAILED(dev_->CreatePixelShader(sb.psOverlay->GetBufferPointer(), sb.psOverlay->GetBufferSize(), &psOverlay_))) return false;
+        D3D10_BLEND_DESC bdsc = {};
+        bdsc.BlendEnable[0] = TRUE; bdsc.SrcBlend = D3D10_BLEND_ONE; bdsc.DestBlend = D3D10_BLEND_INV_SRC_ALPHA; bdsc.BlendOp = D3D10_BLEND_OP_ADD;
+        bdsc.SrcBlendAlpha = D3D10_BLEND_ONE; bdsc.DestBlendAlpha = D3D10_BLEND_INV_SRC_ALPHA; bdsc.BlendOpAlpha = D3D10_BLEND_OP_ADD;
+        bdsc.RenderTargetWriteMask[0] = D3D10_COLOR_WRITE_ENABLE_ALL;
+        dev_->CreateBlendState(&bdsc, &blend_);
 
         D3D10_SAMPLER_DESC sd = {};
         sd.Filter = D3D10_FILTER_MIN_MAG_MIP_LINEAR;
@@ -71,11 +78,11 @@ public:
             bb->Release();
         }
         D3D10_MAPPED_TEXTURE2D mt;
-        if (SUCCEEDED(idxTex_->Map(0, D3D10_MAP_WRITE_DISCARD, 0, &mt))) {
-            for (int y = 0; y < f.height; y++) memcpy((uint8_t*)mt.pData + y * mt.RowPitch, f.pixels.data() + (size_t)y * f.width, f.width);
-            idxTex_->Unmap(0);
+        if (f.dirtyY1 > f.dirtyY0) {
+            D3D10_BOX box = {0, (UINT)f.dirtyY0, 0, (UINT)f.width, (UINT)f.dirtyY1, 1};
+            dev_->UpdateSubresource(idxTex_, 0, &box, f.pixels.data() + (size_t)f.dirtyY0 * f.width, f.width, 0);
         }
-        if (SUCCEEDED(palTex_->Map(0, D3D10_MAP_WRITE_DISCARD, 0, &mt))) { memcpy(mt.pData, f.palette, 1024); palTex_->Unmap(0); }
+        if (f.paletteChanged && SUCCEEDED(palTex_->Map(0, D3D10_MAP_WRITE_DISCARD, 0, &mt))) { memcpy(mt.pData, f.palette, 1024); palTex_->Unmap(0); }
         ScaleConstants sc = MakeScaleConstants(f, vp, opt);
         void* p;
         if (SUCCEEDED(cb_->Map(D3D10_MAP_WRITE_DISCARD, 0, &p))) { memcpy(p, &sc, sizeof(sc)); cb_->Unmap(); }
@@ -102,17 +109,51 @@ public:
         dev_->PSSetSamplers(0, 1, &samp_);
         dev_->PSSetConstantBuffers(0, 1, &cb_);
         dev_->PSSetShader(psScale_);
-        dev_->Draw(3, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) dev_->Draw(3, 0);
+        DrawOverlay(f, vp);
         return dxgi_.Present(opt.vsync);
     }
+    void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
 
 private:
+    void DrawOverlay(const Frame& f, const Viewport& vp) {
+        const Overlay* o = overlay_;
+        if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
+        bool full = false;
+        if (o->width != ovW_ || o->height != ovH_) {
+            SafeRelease(ovSrv_); SafeRelease(ovTex_);
+            D3D10_TEXTURE2D_DESC td = {};
+            td.Width = o->width; td.Height = o->height; td.MipLevels = 1; td.ArraySize = 1; td.SampleDesc.Count = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_SHADER_RESOURCE;
+            if (FAILED(dev_->CreateTexture2D(&td, nullptr, &ovTex_))) return;
+            dev_->CreateShaderResourceView(ovTex_, nullptr, &ovSrv_);
+            ovW_ = o->width; ovH_ = o->height; full = true;
+        }
+        int y0 = full ? 0 : o->dirtyY0, y1 = full ? o->height : o->dirtyY1;
+        if (y1 > y0) {
+            D3D10_BOX box = {0, (UINT)y0, 0, (UINT)o->width, (UINT)y1, 1};
+            dev_->UpdateSubresource(ovTex_, 0, &box, o->pixels.data() + (size_t)y0 * o->width, o->width * 4, 0);
+        }
+        float x, y, w, h;
+        OverlayRect(*o, f, vp, x, y, w, h);
+        D3D10_VIEWPORT v = {(INT)x, (INT)y, (UINT)(w + 0.5f), (UINT)(h + 0.5f), 0, 1};
+        dev_->RSSetViewports(1, &v);
+        float bf[4] = {0, 0, 0, 0};
+        dev_->OMSetBlendState(blend_, bf, 0xffffffff);
+        dev_->PSSetShaderResources(3, 1, &ovSrv_);
+        dev_->PSSetShader(psOverlay_);
+        dev_->Draw(3, 0);
+        dev_->OMSetBlendState(nullptr, bf, 0xffffffff);
+        ID3D10ShaderResourceView* nul = nullptr;
+        dev_->PSSetShaderResources(3, 1, &nul);
+    }
+
     bool CreateFrameResources(int w, int h) {
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_);
         D3D10_TEXTURE2D_DESC td = {};
         td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.SampleDesc.Count = 1;
-        td.Format = DXGI_FORMAT_R8_UINT; td.Usage = D3D10_USAGE_DYNAMIC;
-        td.BindFlags = D3D10_BIND_SHADER_RESOURCE; td.CPUAccessFlags = D3D10_CPU_ACCESS_WRITE;
+        td.Format = DXGI_FORMAT_R8_UINT; td.Usage = D3D10_USAGE_DEFAULT;
+        td.BindFlags = D3D10_BIND_SHADER_RESOURCE; td.CPUAccessFlags = 0;
         if (FAILED(dev_->CreateTexture2D(&td, nullptr, &idxTex_))) return false;
         dev_->CreateShaderResourceView(idxTex_, nullptr, &idxSrv_);
         td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.Usage = D3D10_USAGE_DEFAULT; td.CPUAccessFlags = 0;
@@ -130,6 +171,11 @@ private:
     ID3D10VertexShader* vs_ = nullptr;
     ID3D10PixelShader* psPal_ = nullptr;
     ID3D10PixelShader* psScale_ = nullptr;
+    ID3D10PixelShader* psOverlay_ = nullptr;
+    ID3D10BlendState* blend_ = nullptr;
+    ID3D10Texture2D* ovTex_ = nullptr;
+    ID3D10ShaderResourceView* ovSrv_ = nullptr;
+    int ovW_ = 0, ovH_ = 0;
     ID3D10SamplerState* samp_ = nullptr;
     ID3D10Buffer* cb_ = nullptr;
     ID3D10Texture2D* idxTex_ = nullptr;

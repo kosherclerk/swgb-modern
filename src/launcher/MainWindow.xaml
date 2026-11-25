@@ -59,6 +59,41 @@
         </ScrollViewer>
       </TabItem>
 
+      <!-- COMPONENTS -->
+      <TabItem Header="Components">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8,4">
+          <StackPanel>
+            <TextBlock Style="{StaticResource Section}" Text="PROFILE"/>
+            <TextBlock><Run Text="Current: "/><Run Text="{Binding ProfileText, Mode=OneWay}" Foreground="{StaticResource Accent}"/></TextBlock>
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <Button Content="Faithful (original look)" Click="ProfileFaithful_Click"/>
+              <Button Content="Enhanced (all improvements)" Click="ProfileEnhanced_Click"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Hint}" Text="Profiles only set the switches below; you can still change any of them."/>
+
+            <TextBlock Style="{StaticResource Section}" Text="CORE - always active, keeps the original look"/>
+            <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,4"
+                       Text="Modern renderers (DirectDraw replacement) - borderless/windowed modes - correct mouse and text boxes at any scale - per-monitor DPI - no palette corruption or Alt+Tab crashes - CPU idle fix - local crash dumps."/>
+            <CheckBox Content="SWGB Modern audio engine (WASAPI, high-quality resampling)" IsChecked="{Binding AudioEnabled}"/>
+            <CheckBox Content="In-game volume sliders do not change the Windows volume" IsChecked="{Binding IsolateVolume}"/>
+            <CheckBox Content="Play the intro videos (through the mod's renderer)" IsChecked="{Binding PlayIntro}"/>
+
+            <TextBlock Style="{StaticResource Section}" Text="ENHANCEMENTS - optional, change the original look"/>
+            <CheckBox Content="Widescreen battlefield (rebuilt command panel, set up on the Display tab)" IsChecked="{Binding EnhWidescreen}"/>
+            <TextBlock Style="{StaticResource Hint}" Margin="22,0,0,6" Text="Multiplayer note: a wider screen shows more of the battlefield than players on original resolutions see."/>
+            <CheckBox Content="Smooth rendering: battlefield redrawn up to 60 times per second (original 20). Game speed unchanged." IsChecked="{Binding EnhSmooth}"/>
+            <CheckBox Content="Upscaling filter instead of plain pixels (choose the filter on the Display tab)" IsChecked="{Binding EnhFilter}"/>
+            <CheckBox Content="HD text: interface text drawn sharply at screen resolution" IsChecked="{Binding HdText}"/>
+            <CheckBox Content="HD menu backgrounds (generated once on this PC with an AI upscaler)" IsChecked="{Binding HdMenus}"/>
+            <CheckBox Content="HD intro videos (generated once on this PC with an AI upscaler)" IsChecked="{Binding HdVideos}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+              <Button Content="Generate HD assets..." Click="GenerateHd_Click"/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource Hint}" Text="{Binding HdStatus}"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <!-- DISPLAY -->
       <TabItem Header="Display">
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8,4">
@@ -77,19 +112,29 @@
             <TextBlock Style="{StaticResource Section}" Text="RESOLUTION AND UI SCALE"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+              <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
               <TextBlock Style="{StaticResource Label}" Text="Resolution"/>
               <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ResolutionModes}" SelectedValue="{Binding ResolutionMode}" MinWidth="320"/>
-              <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="UI scale" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}"/>
-              <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" MinWidth="120" ItemsSource="{Binding UiScales}" SelectedValue="{Binding UiScale}" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}"/>
+              <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Native resolution" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}"/>
+              <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}">
+                <ComboBox MinWidth="180" ItemsSource="{Binding NativeModes}" SelectedValue="{Binding NativeRes}"/>
+                <StackPanel Orientation="Horizontal" Margin="10,3,0,3" Visibility="{Binding IsCustomNative, Converter={StaticResource Vis}}">
+                  <TextBox Width="70" Text="{Binding NativeW, UpdateSourceTrigger=LostFocus}"/>
+                  <TextBlock Text=" x " VerticalAlignment="Center"/>
+                  <TextBox Width="70" Text="{Binding NativeH, UpdateSourceTrigger=LostFocus}"/>
+                </StackPanel>
+              </StackPanel>
+              <TextBlock Grid.Row="2" Style="{StaticResource Label}" Text="Scale" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}"/>
+              <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Left" MinWidth="460" ItemsSource="{Binding ScaleChoices}" SelectedItem="{Binding SelectedScale}"
+                        DisplayMemberPath="" SelectedValuePath="" Visibility="{Binding IsScaledResolution, Converter={StaticResource Vis}}"/>
               <TextBlock Grid.Row="2" Style="{StaticResource Label}" Text="Size" Visibility="{Binding IsCustomResolution, Converter={StaticResource Vis}}"/>
               <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3" Visibility="{Binding IsCustomResolution, Converter={StaticResource Vis}}">
                 <TextBox Width="80" Text="{Binding CustomWidth, UpdateSourceTrigger=PropertyChanged}"/>
                 <TextBlock Text=" x " VerticalAlignment="Center"/>
                 <TextBox Width="80" Text="{Binding CustomHeight, UpdateSourceTrigger=PropertyChanged}"/>
               </StackPanel>
-              <TextBlock Grid.Row="3" Style="{StaticResource Label}" Text="Command panel"/>
-              <ComboBox Grid.Row="3" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding PanelStyles}" SelectedValue="{Binding PanelStyle}"/>
+              <TextBlock Grid.Row="4" Style="{StaticResource Label}" Text="Command panel"/>
+              <ComboBox Grid.Row="4" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding PanelStyles}" SelectedValue="{Binding PanelStyle}"/>
             </Grid>
             <TextBlock Style="{StaticResource Hint}" Text="{Binding ResolutionSummary}"/>
 

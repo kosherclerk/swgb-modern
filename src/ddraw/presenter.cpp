@@ -78,7 +78,7 @@ void Presenter::GameSize(int& w, int& h) {
 const char* Presenter::BackendName() { return backendName_; }
 
 Viewport Presenter::ComputeViewport(int cw, int ch, int gw, int gh) {
-    static ScaleMode mode = ParseScale(CfgStr("Display", "ScaleMode", "aspect"));
+    ScaleMode mode = (ScaleMode)scaleMode_;
     if (cw <= 0 || ch <= 0 || gw <= 0 || gh <= 0) return {0, 0, std::max(cw, 1), std::max(ch, 1)};
     if (mode == ScaleMode::Stretch) return {0, 0, cw, ch};
     double s = std::min((double)cw / gw, (double)ch / gh);
@@ -135,17 +135,13 @@ static void DumpFrameBMP(const Frame& f) {
     fclose(fp);
 }
 
-DWORD WINAPI Presenter::ThreadMain(void* p) { ((Presenter*)p)->Run(); return 0; }
-
-void Presenter::Run() {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-    std::unique_ptr<Renderer> r = CreateBackend();
-    backendName_ = r ? r->Name() : "none";
-    PresentOptions opt;
+void Presenter::LoadOptions(PresentOptions& opt, int& maxFps) {
     opt.filter = ParseFilter(CfgStr("Display", "Filter", "nearest"));
     opt.vsync = CfgBool("Display", "VSync", true);
     opt.sharpness = CfgFloat("Display", "Sharpness", 0.5f);
-    int maxFps = CfgInt("Display", "MaxFPS", 0);
+    scaleMode_ = (LONG)ParseScale(CfgStr("Display", "ScaleMode", "aspect"));
+    rendererName_ = CfgStr("Display", "Renderer", "auto");
+    maxFps = CfgInt("Display", "MaxFPS", 0);
     if (maxFps <= 0 && opt.vsync) {
         // Drivers can force VSync off ("Wait for vertical refresh: off"); cap
         // at the refresh rate of the monitor the window is on regardless.
@@ -156,8 +152,28 @@ void Presenter::Run() {
         dm.dmSize = sizeof(dm);
         if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
             maxFps = (int)dm.dmDisplayFrequency;
-        LOG("frame limiter: %d fps (display refresh)", maxFps);
     }
+}
+
+DWORD WINAPI Presenter::ThreadMain(void* p) { ((Presenter*)p)->Run(); return 0; }
+
+void Presenter::Run() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    std::unique_ptr<Renderer> r = CreateBackend();
+    backendName_ = r ? r->Name() : "none";
+    PresentOptions opt;
+    int maxFps = 0;
+    LoadOptions(opt, maxFps);
+    FILETIME iniTime = {};
+    auto iniStamp = [&]() {
+        WIN32_FILE_ATTRIBUTE_DATA a;
+        FILETIME t = {};
+        if (GetFileAttributesExW(ConfigPath().c_str(), GetFileExInfoStandard, &a)) t = a.ftLastWriteTime;
+        return t;
+    };
+    iniTime = iniStamp();
+    DWORD lastIniCheck = GetTickCount();
+    LOG("frame limiter: %d fps%s", maxFps, maxFps ? "" : " (off)");
     int dumpEvery = CfgInt("Debug", "DumpFrameSeconds", 0);
     DWORD lastDump = GetTickCount();
 
@@ -169,11 +185,31 @@ void Presenter::Run() {
     QueryPerformanceCounter(&last);
 
     Frame frame;
-    DWORD frames = 0, uniqueFrames = 0, fpsTick = GetTickCount();
-    uint64_t lastHash = 0;
+    DWORD frames = 0, uniqueFrames = 0, skipped = 0, fpsTick = GetTickCount();
+    bool forceFull = true;
+    int lastCw = -1, lastCh = -1;
     while (running_) {
-        DWORD wr = WaitForSingleObject(frameEvent_, 200); // periodic refresh keeps resizes smooth
+        DWORD wr = WaitForSingleObject(frameEvent_, 200); // periodic wake keeps resizes smooth
         if (!running_) break;
+        // Live settings: the launcher's Save applies while the game runs.
+        if (GetTickCount() - lastIniCheck > 500) {
+            lastIniCheck = GetTickCount();
+            FILETIME t = iniStamp();
+            if (CompareFileTime(&t, &iniTime) != 0) {
+                iniTime = t;
+                std::string before = rendererName_;
+                LoadOptions(opt, maxFps);
+                LOG("settings reloaded: renderer %s, filter %d, vsync %d, max fps %d", rendererName_.c_str(), (int)opt.filter, opt.vsync, maxFps);
+                // A window keeps traces of the API that drew it (GL pixel format,
+                // DXGI flip-model association), so switching APIs live is not
+                // reliable: the renderer applies on the next game start.
+                if (rendererName_ != before) LOG("renderer change to '%s' applies on next start", rendererName_.c_str());
+                PostMessageW(hwnd_, WM_APP + 0x5157, 0, 0); // window mode / cursor lock, applied on the game thread
+                forceFull = true;
+                lastCw = -1;
+            }
+        }
+        if (r) r->WaitForNextFrame();
         bool have = SnapshotPrimary(frame);
         InterlockedExchange(&pendingFlip_, 0);
         SetEvent(consumedEvent_);
@@ -181,36 +217,43 @@ void Presenter::Run() {
 
         RECT rc;
         GetClientRect(hwnd_, &rc);
+        bool resized = rc.right != lastCw || rc.bottom != lastCh;
+        if (forceFull) frame.MarkAll();
+        if (dumpEvery > 0 && GetTickCount() - lastDump > (DWORD)dumpEvery * 1000) {
+            DumpFrameBMP(frame);
+            lastDump = GetTickCount();
+        }
+        // Nothing new and nothing moved: keep the last presented image.
+        // (The engine re-blits identical frames ~3x per real change.)
+        if (!frame.Dirty() && !resized) { skipped++; continue; }
+        lastCw = rc.right; lastCh = rc.bottom;
         Viewport vp = ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
         EnterCriticalSection(&vpLock_);
         vp_ = vp;
         gameW_ = frame.width; gameH_ = frame.height;
         LeaveCriticalSection(&vpLock_);
 
+        if (frame.Dirty()) uniqueFrames++;
         if (!r->Present(frame, vp, rc.right, rc.bottom, opt)) {
             LOG("Renderer %s: present failed, recreating", r->Name());
             r.reset();
             r = CreateBackend();
             backendName_ = r ? r->Name() : "none";
+            forceFull = true;
+            lastCw = -1;
+            continue;
         }
+        forceFull = false;
         (void)wr;
         frames++;
-        if (LogEnabled()) { // count frames whose content actually changed
-            uint64_t hsh = 1469598103934665603ull;
-            const uint64_t* q = (const uint64_t*)frame.pixels.data();
-            for (size_t i = 0, n = frame.pixels.size() / 8; i < n; i += 7) hsh = (hsh ^ q[i]) * 1099511628211ull;
-            if (hsh != lastHash) { uniqueFrames++; lastHash = hsh; }
-        }
-        if (dumpEvery > 0 && GetTickCount() - lastDump > (DWORD)dumpEvery * 1000) {
-            DumpFrameBMP(frame);
-            lastDump = GetTickCount();
-        }
         if (GetTickCount() - fpsTick >= 5000) {
-            LOG("present: %.1f fps (%.1f distinct), game %dx%d -> viewport %dx%d @%d,%d (%s)", frames * 1000.0 / (GetTickCount() - fpsTick),
-                uniqueFrames * 1000.0 / (GetTickCount() - fpsTick),
+            LOG("present: %.1f fps (%.1f with new content, %.1f/s identical skipped), game %dx%d -> viewport %dx%d @%d,%d (%s)",
+                frames * 1000.0 / (GetTickCount() - fpsTick), uniqueFrames * 1000.0 / (GetTickCount() - fpsTick),
+                skipped * 1000.0 / (GetTickCount() - fpsTick),
                 frame.width, frame.height, vp.w, vp.h, vp.x, vp.y, backendName_);
             frames = 0;
             uniqueFrames = 0;
+            skipped = 0;
             fpsTick = GetTickCount();
             if (CfgBool("Debug", "ThreadReport", false)) LogThreadReport();
         }

@@ -31,6 +31,50 @@ public static class SystemInfo
         return (GetSystemMetrics(0), GetSystemMetrics(1), 60);
     }
 
+    /// <summary>All distinct resolutions the primary monitor supports, largest first.</summary>
+    public static List<(int W, int H)> MonitorModes()
+    {
+        var set = new HashSet<(int, int)>();
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        for (int i = 0; EnumDisplaySettingsW(null, i, ref dm); i++)
+            if (dm.dmPelsWidth >= 1280 && dm.dmPelsHeight >= 720) set.Add((dm.dmPelsWidth, dm.dmPelsHeight));
+        var (cw, ch, _) = PrimaryMonitor();
+        set.Add((cw, ch));
+        return set.OrderByDescending(m => m.Item1 * m.Item2).ThenByDescending(m => m.Item1).ToList();
+    }
+
+    public sealed record ScaleOption(double Scale, int W, int H, bool Integer, bool ClosestToOriginal)
+    {
+        public override string ToString()
+        {
+            string s = Scale == Math.Floor(Scale) ? $"{Scale:0}x" : $"{Scale:0.##}x";
+            string kind = Integer ? "pixel-perfect" : "non-integer - use Sharp or xBR";
+            string ui = $"{W}x{H}";
+            return $"{s}  ->  {ui}  ({kind}){(ClosestToOriginal ? "  - closest to original" : "")}";
+        }
+    }
+
+    /// <summary>
+    /// In-game resolutions for a native resolution. The engine's widescreen
+    /// layout needs at least 1280x720. "Closest to original": the game height
+    /// nearest 1024 (the original maximum, 1280x1024), which keeps the command
+    /// panel at roughly its original share of the screen.
+    /// </summary>
+    public static List<ScaleOption> ScaleOptions(int nw, int nh)
+    {
+        var list = new List<ScaleOption>();
+        foreach (var s in new[] { 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0 })
+        {
+            int w = (int)Math.Round(nw / s) & ~1, h = (int)Math.Round(nh / s) & ~1;
+            if (w < 1280 || h < 720) continue;
+            bool integer = s == Math.Floor(s) && nw % (int)s == 0 && nh % (int)s == 0;
+            list.Add(new ScaleOption(s, w, h, integer, false));
+        }
+        if (list.Count == 0) list.Add(new ScaleOption(1, Math.Max(1280, nw), Math.Max(720, nh), true, false));
+        var best = list.OrderBy(o => Math.Abs(o.H - 1024)).ThenByDescending(o => o.Integer).First();
+        return list.Select(o => o == best ? o with { ClosestToOriginal = true } : o).ToList();
+    }
+
     /// <summary>
     /// Game resolution for a given UI scale: the monitor divided by an integer
     /// factor, so every game pixel maps to an exact NxN block (crisp UI).

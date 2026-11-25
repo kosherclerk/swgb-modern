@@ -30,12 +30,32 @@ public partial class MainWindow : Window
                 TryInstall(silent: true);
                 _vm.Status = $"Updated to {_vm.Version}.";
             }
-            else if (_vm.CheckUpdates)
+            else
             {
-                await CheckForUpdates(interactive: false);
+                if (_vm.GameDir != null) AskProfileIfFirstRun();
+                if (_vm.CheckUpdates) await CheckForUpdates(interactive: false);
             }
         };
         Closing += (_, _) => { try { _vm.SaveAll(); } catch { } };
+    }
+
+    private async void GenerateHd_Click(object sender, RoutedEventArgs e) => await GenerateHdAssets();
+
+    private void ProfileFaithful_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("faithful"); _vm.Status = "Faithful profile selected - press Save or Play."; }
+    private void ProfileEnhanced_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("enhanced"); _vm.Status = "Enhanced profile selected - press Save or Play."; }
+
+    /// <summary>First start: let the player choose between the original look and all enhancements.</summary>
+    private void AskProfileIfFirstRun()
+    {
+        if (_vm.Prefs.Profile != null) return;
+        var r = MessageBox.Show(this,
+            "How would you like to play?\n\n" +
+            "YES - Enhanced: widescreen, smooth 60 fps rendering, upscaling filter, HD text, menus and videos.\n\n" +
+            "NO - Faithful: the original look (4:3, 20 fps redraw, plain pixels). Only compatibility fixes " +
+            "(modern renderer, audio, crash and CPU fixes) are applied.\n\nYou can change every option later on the Components tab.",
+            "SWGB Modern - choose a profile", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        _vm.ApplyProfile(r == MessageBoxResult.Yes ? "enhanced" : "faithful");
+        try { _vm.SaveAll(); } catch { }
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -187,6 +207,12 @@ public partial class MainWindow : Window
             _vm.Status = "Update check failed.";
             if (interactive) Error("Update check failed", ex);
         }
+    }
+
+    private Task GenerateHdAssets()
+    {
+        _vm.HdStatus = "HD asset generation is not available in this build yet.";
+        return Task.CompletedTask;
     }
 
     private static string Trim(string s) => s.Length > 600 ? s[..600] + "..." : s;

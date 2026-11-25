@@ -19,12 +19,32 @@ struct Frame {
     int width = 0, height = 0;          // game resolution
     std::vector<uint8_t> pixels;        // width*height indices, tightly packed
     uint32_t palette[256];              // 0x00RRGGBB entries
+    // Rows [dirtyY0, dirtyY1) changed since the previous Present(); backends
+    // upload only those (empty range = indices unchanged). paletteChanged set
+    // when the palette differs. Both are "everything" after a size change.
+    int dirtyY0 = 0, dirtyY1 = 0;
+    bool paletteChanged = true;
+    bool Dirty() const { return dirtyY1 > dirtyY0 || paletteChanged; }
+    void MarkAll() { dirtyY0 = 0; dirtyY1 = height; paletteChanged = true; }
 };
 
 struct PresentOptions {
     Filter filter = Filter::Nearest;
     bool vsync = true;
     float sharpness = 0.5f;             // used by xBR / sharp filters
+};
+
+// RGBA layer composited above the game image (intro videos, HD text, HD menu
+// backgrounds). Pixels are premultiplied BGRA, width*height, top-down.
+struct Overlay {
+    bool visible = false;
+    int width = 0, height = 0;
+    std::vector<uint32_t> pixels;
+    int dirtyY0 = 0, dirtyY1 = 0;      // rows to upload (like Frame)
+    // Destination in game-frame coordinates (scaled with the frame); a
+    // fullscreen video uses {0,0,frame w,frame h}.
+    float x = 0, y = 0, w = 0, h = 0;
+    bool hideFrame = false;            // draw black instead of the game image (videos)
 };
 
 class Renderer {
@@ -37,6 +57,20 @@ public:
     // Draw frame into viewport (client coordinates); clear the rest black.
     virtual bool Present(const Frame& f, const Viewport& vp, int clientW, int clientH,
                          const PresentOptions& opt) = 0;
+    // Optional: block until the swapchain can accept another frame (low
+    // latency: the presenter then snapshots the freshest game frame).
+    virtual void WaitForNextFrame() {}
+    // Optional overlay; drawn after the game image in Present(). Backends that
+    // do not override it simply show no overlay.
+    virtual void SetOverlay(const Overlay* o) { overlay_ = o; }
+
+protected:
+    const Overlay* overlay_ = nullptr;
+    // Overlay rect in client coordinates for a viewport.
+    static void OverlayRect(const Overlay& o, const Frame& f, const Viewport& vp, float& x, float& y, float& w, float& h) {
+        float sx = (float)vp.w / f.width, sy = (float)vp.h / f.height;
+        x = vp.x + o.x * sx; y = vp.y + o.y * sy; w = o.w * sx; h = o.h * sy;
+    }
 };
 
 std::unique_ptr<Renderer> CreateSoftwareRenderer();
@@ -52,6 +86,7 @@ extern const char* g_hlslSource;
 extern const char* g_glslVertex;
 extern const char* g_glslPaletteFrag;
 extern const char* g_glslScaleFrag;
+extern const char* g_glslOverlayFrag;
 
 // Constant block shared by all GPU backends for the scale pass (std140 compatible)
 struct ScaleConstants {

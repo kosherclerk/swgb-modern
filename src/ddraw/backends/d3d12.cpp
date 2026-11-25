@@ -26,8 +26,10 @@ public:
         WaitIdle();
         ReleaseBackBuffers();
         ReleaseFrame();
-        SafeRelease(palTex_); SafeRelease(psoPal_); SafeRelease(psoScale_); SafeRelease(rootSig_);
-        SafeRelease(list_); SafeRelease(alloc_); SafeRelease(fence_); SafeRelease(rtvHeap_); SafeRelease(srvHeap_);
+        SafeRelease(palTex_); SafeRelease(psoPal_); SafeRelease(psoScale_); SafeRelease(psoOverlay_); SafeRelease(rootSig_);
+        SafeRelease(ovTex_);
+        for (int i = 0; i < kInFlight; i++) { if (ovUpload_[i]) ovUpload_[i]->Unmap(0, nullptr); SafeRelease(ovUpload_[i]); }
+        SafeRelease(list_); for (auto& a : alloc_) SafeRelease(a); SafeRelease(fence_); SafeRelease(rtvHeap_); SafeRelease(srvHeap_);
         SafeRelease(swap3_);
         if (fenceEvent_) CloseHandle(fenceEvent_);
         SafeRelease(queue_); SafeRelease(dev_);
@@ -52,14 +54,15 @@ public:
         hd.NumDescriptors = kBackBuffers + 1;
         if (FAILED(dev_->CreateDescriptorHeap(&hd, IID_ID3D12DescriptorHeap, (void**)&rtvHeap_))) return false;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 3;
+        hd.NumDescriptors = 4;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(dev_->CreateDescriptorHeap(&hd, IID_ID3D12DescriptorHeap, (void**)&srvHeap_))) return false;
         rtvInc_ = dev_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         srvInc_ = dev_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        if (FAILED(dev_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, (void**)&alloc_))) return false;
-        if (FAILED(dev_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc_, nullptr, IID_ID3D12GraphicsCommandList, (void**)&list_))) return false;
+        for (auto& a : alloc_)
+            if (FAILED(dev_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, (void**)&a))) return false;
+        if (FAILED(dev_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc_[0], nullptr, IID_ID3D12GraphicsCommandList, (void**)&list_))) return false;
         list_->Close();
         if (FAILED(dev_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_ID3D12Fence, (void**)&fence_))) return false;
         fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -80,36 +83,44 @@ public:
             ReleaseBackBuffers();
             if (!dxgi_.Resize(cw, ch) || !AcquireBackBuffers()) return false;
         }
-        // previous frame must be done with the upload buffer
-        if (lastSubmit_ && fence_->GetCompletedValue() < lastSubmit_) {
-            fence_->SetEventOnCompletion(lastSubmit_, fenceEvent_);
+        // two frames in flight: wait only for the frame that used this slot
+        cur_ = (cur_ + 1) % kInFlight;
+        if (slotFence_[cur_] && fence_->GetCompletedValue() < slotFence_[cur_]) {
+            fence_->SetEventOnCompletion(slotFence_[cur_], fenceEvent_);
             WaitForSingleObject(fenceEvent_, 2000);
         }
-        // fill upload buffer
-        uint8_t* up = nullptr;
-        D3D12_RANGE none = {0, 0};
-        if (FAILED(upload_->Map(0, &none, (void**)&up))) return false;
-        for (int y = 0; y < f.height; y++) memcpy(up + idxFoot_.Offset + (size_t)y * idxFoot_.Footprint.RowPitch, f.pixels.data() + (size_t)y * f.width, f.width);
-        memcpy(up + palFoot_.Offset, f.palette, 1024);
-        upload_->Unmap(0, nullptr);
+        int y0 = allDirty_ ? 0 : f.dirtyY0, y1 = allDirty_ ? f.height : f.dirtyY1;
+        bool pal = allDirty_ || f.paletteChanged;
+        uint8_t* up = uploadPtr_[cur_];
+        for (int y = y0; y < y1; y++) memcpy(up + idxFoot_.Offset + (size_t)y * idxFoot_.Footprint.RowPitch, f.pixels.data() + (size_t)y * f.width, f.width);
+        if (pal) memcpy(up + palFoot_.Offset, f.palette, 1024);
 
-        alloc_->Reset();
-        list_->Reset(alloc_, nullptr);
-        D3D12_RESOURCE_BARRIER b1[2] = {Transition(idxTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-                                        Transition(palTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)};
-        list_->ResourceBarrier(2, b1);
+        alloc_[cur_]->Reset();
+        list_->Reset(alloc_[cur_], nullptr);
         D3D12_TEXTURE_COPY_LOCATION dst = {}, src = {};
         dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.pResource = upload_;
-        dst.pResource = idxTex_; src.PlacedFootprint = idxFoot_;
-        list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-        dst.pResource = palTex_; src.PlacedFootprint = palFoot_;
-        list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-        D3D12_RESOURCE_BARRIER b2[3] = {Transition(idxTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-                                        Transition(palTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-                                        Transition(frameTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};
-        list_->ResourceBarrier(3, b2);
+        src.pResource = upload_[cur_];
+        if (y1 > y0) {
+            D3D12_RESOURCE_BARRIER b = Transition(idxTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            list_->ResourceBarrier(1, &b);
+            dst.pResource = idxTex_; src.PlacedFootprint = idxFoot_;
+            D3D12_BOX box = {0, (UINT)y0, 0, (UINT)f.width, (UINT)y1, 1};
+            list_->CopyTextureRegion(&dst, 0, (UINT)y0, 0, &src, &box);
+            b = Transition(idxTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list_->ResourceBarrier(1, &b);
+        }
+        if (pal) {
+            D3D12_RESOURCE_BARRIER b = Transition(palTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            list_->ResourceBarrier(1, &b);
+            dst.pResource = palTex_; src.PlacedFootprint = palFoot_;
+            list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            b = Transition(palTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list_->ResourceBarrier(1, &b);
+        }
+        allDirty_ = false;
+        D3D12_RESOURCE_BARRIER b2 = Transition(frameTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        list_->ResourceBarrier(1, &b2);
 
         list_->SetGraphicsRootSignature(rootSig_);
         list_->SetDescriptorHeaps(1, &srvHeap_);
@@ -140,19 +151,75 @@ public:
         ScaleConstants sc = MakeScaleConstants(f, vp, opt);
         list_->SetGraphicsRoot32BitConstants(1, sizeof(sc) / 4, &sc, 0);
         list_->SetPipelineState(psoScale_);
-        list_->DrawInstanced(3, 1, 0, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) list_->DrawInstanced(3, 1, 0, 0);
+        DrawOverlay(f, vp);
         D3D12_RESOURCE_BARRIER b4 = Transition(bb_[bi], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         list_->ResourceBarrier(1, &b4);
         if (FAILED(list_->Close())) return false;
         ID3D12CommandList* lists[] = {list_};
         queue_->ExecuteCommandLists(1, lists);
         bool ok = dxgi_.Present(opt.vsync);
-        lastSubmit_ = ++fenceValue_;
-        queue_->Signal(fence_, lastSubmit_);
+        slotFence_[cur_] = ++fenceValue_;
+        queue_->Signal(fence_, slotFence_[cur_]);
         return ok;
     }
+    void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
 
 private:
+    // Overlay: default-heap texture updated from a per-frame upload buffer.
+    void DrawOverlay(const Frame& f, const Viewport& vp) {
+        const Overlay* o = overlay_;
+        if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
+        bool full = false;
+        if (o->width != ovW_ || o->height != ovH_) {
+            WaitIdle();
+            SafeRelease(ovTex_);
+            for (int i = 0; i < kInFlight; i++) { if (ovUpload_[i]) ovUpload_[i]->Unmap(0, nullptr); SafeRelease(ovUpload_[i]); ovPtr_[i] = nullptr; }
+            ovTex_ = CreateTex(o->width, o->height, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            if (!ovTex_) return;
+            WriteSrv(3, ovTex_, DXGI_FORMAT_B8G8R8A8_UNORM);
+            D3D12_RESOURCE_DESC desc = ovTex_->GetDesc();
+            UINT64 sz = 0;
+            dev_->GetCopyableFootprints(&desc, 0, 1, 0, &ovFoot_, nullptr, nullptr, &sz);
+            D3D12_HEAP_PROPERTIES hp = {};
+            hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+            D3D12_RESOURCE_DESC bd = {};
+            bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            bd.Width = sz; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
+            bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            for (int i = 0; i < kInFlight; i++) {
+                if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                         IID_ID3D12Resource, (void**)&ovUpload_[i]))) return;
+                D3D12_RANGE none = {0, 0};
+                ovUpload_[i]->Map(0, &none, (void**)&ovPtr_[i]);
+            }
+            ovW_ = o->width; ovH_ = o->height; full = true;
+        }
+        int y0 = full ? 0 : o->dirtyY0, y1 = full ? o->height : o->dirtyY1;
+        if (y1 > y0) {
+            for (int y = y0; y < y1; y++)
+                memcpy(ovPtr_[cur_] + ovFoot_.Offset + (size_t)y * ovFoot_.Footprint.RowPitch, o->pixels.data() + (size_t)y * o->width, (size_t)o->width * 4);
+            D3D12_RESOURCE_BARRIER b = Transition(ovTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            list_->ResourceBarrier(1, &b);
+            D3D12_TEXTURE_COPY_LOCATION dst = {}, src = {};
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.pResource = ovTex_;
+            src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; src.pResource = ovUpload_[cur_]; src.PlacedFootprint = ovFoot_;
+            D3D12_BOX box = {0, (UINT)y0, 0, (UINT)o->width, (UINT)y1, 1};
+            list_->CopyTextureRegion(&dst, 0, (UINT)y0, 0, &src, &box);
+            b = Transition(ovTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list_->ResourceBarrier(1, &b);
+            // copies need the render target re-bound? no: RT binding survives barriers on other resources
+        }
+        float x, y, w, h;
+        OverlayRect(*o, f, vp, x, y, w, h);
+        D3D12_VIEWPORT v = {x, y, w, h, 0, 1};
+        D3D12_RECT sr = {(LONG)x, (LONG)y, (LONG)(x + w + 0.5f), (LONG)(y + h + 0.5f)};
+        list_->RSSetViewports(1, &v);
+        list_->RSSetScissorRects(1, &sr);
+        list_->SetPipelineState(psoOverlay_);
+        list_->DrawInstanced(3, 1, 0, 0);
+    }
+
     void WaitIdle() {
         if (!queue_ || !fence_) return;
         UINT64 v = ++fenceValue_;
@@ -193,7 +260,10 @@ private:
             return nullptr;
         return r;
     }
-    void ReleaseFrame() { SafeRelease(idxTex_); SafeRelease(frameTex_); SafeRelease(upload_); }
+    void ReleaseFrame() {
+        SafeRelease(idxTex_); SafeRelease(frameTex_);
+        for (int i = 0; i < kInFlight; i++) { if (upload_[i]) upload_[i]->Unmap(0, nullptr); SafeRelease(upload_[i]); uploadPtr_[i] = nullptr; }
+    }
     bool CreateFrame(int w, int h) {
         ReleaseFrame();
         idxTex_ = CreateTex(w, h, DXGI_FORMAT_R8_UINT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -214,9 +284,14 @@ private:
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
         bd.Width = palOff + psz; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
         bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                 IID_ID3D12Resource, (void**)&upload_)))
-            return false;
+        for (int i = 0; i < kInFlight; i++) {
+            if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                     IID_ID3D12Resource, (void**)&upload_[i])))
+                return false;
+            D3D12_RANGE none = {0, 0};
+            if (FAILED(upload_[i]->Map(0, &none, (void**)&uploadPtr_[i]))) return false; // persistently mapped
+        }
+        allDirty_ = true;
         fw_ = w; fh_ = h;
         return true;
     }
@@ -231,7 +306,7 @@ private:
     bool CreatePipeline() {
         D3D12_DESCRIPTOR_RANGE range = {};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 3;
+        range.NumDescriptors = 4;
         D3D12_ROOT_PARAMETER params[2] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable.NumDescriptorRanges = 1;
@@ -278,6 +353,12 @@ private:
         pd.PS = {sb.psScale->GetBufferPointer(), sb.psScale->GetBufferSize()};
         pd.RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM;
         if (FAILED(dev_->CreateGraphicsPipelineState(&pd, IID_ID3D12PipelineState, (void**)&psoScale_))) return false;
+        pd.PS = {sb.psOverlay->GetBufferPointer(), sb.psOverlay->GetBufferSize()};
+        auto& bt = pd.BlendState.RenderTarget[0];
+        bt.BlendEnable = TRUE; bt.SrcBlend = D3D12_BLEND_ONE; bt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA; bt.BlendOp = D3D12_BLEND_OP_ADD;
+        bt.SrcBlendAlpha = D3D12_BLEND_ONE; bt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA; bt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        bt.LogicOp = D3D12_LOGIC_OP_NOOP;
+        if (FAILED(dev_->CreateGraphicsPipelineState(&pd, IID_ID3D12PipelineState, (void**)&psoOverlay_))) return false;
         return true;
     }
 
@@ -289,20 +370,30 @@ private:
     ID3D12DescriptorHeap* rtvHeap_ = nullptr;
     ID3D12DescriptorHeap* srvHeap_ = nullptr;
     UINT rtvInc_ = 0, srvInc_ = 0;
-    ID3D12CommandAllocator* alloc_ = nullptr;
+    static const int kInFlight = 2;
+    ID3D12CommandAllocator* alloc_[kInFlight] = {};
+    UINT64 slotFence_[kInFlight] = {};
+    int cur_ = 0;
+    bool allDirty_ = true;
     ID3D12GraphicsCommandList* list_ = nullptr;
     ID3D12Fence* fence_ = nullptr;
     HANDLE fenceEvent_ = nullptr;
     UINT64 fenceValue_ = 0;
-    UINT64 lastSubmit_ = 0;
     ID3D12RootSignature* rootSig_ = nullptr;
     ID3D12PipelineState* psoPal_ = nullptr;
     ID3D12PipelineState* psoScale_ = nullptr;
+    ID3D12PipelineState* psoOverlay_ = nullptr;
+    ID3D12Resource* ovTex_ = nullptr;
+    ID3D12Resource* ovUpload_[2] = {};
+    uint8_t* ovPtr_[2] = {};
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT ovFoot_ = {};
+    int ovW_ = 0, ovH_ = 0;
     ID3D12Resource* bb_[kBackBuffers] = {};
     ID3D12Resource* idxTex_ = nullptr;
     ID3D12Resource* palTex_ = nullptr;
     ID3D12Resource* frameTex_ = nullptr;
-    ID3D12Resource* upload_ = nullptr;
+    ID3D12Resource* upload_[kInFlight] = {};
+    uint8_t* uploadPtr_[kInFlight] = {};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT idxFoot_ = {}, palFoot_ = {};
     int fw_ = 0, fh_ = 0;
 };
