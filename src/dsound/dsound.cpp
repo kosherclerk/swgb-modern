@@ -479,7 +479,22 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     return TRUE;
 }
 
-HRESULT WINAPI DirectSoundCreate(LPCGUID, LPDIRECTSOUND* out, LPUNKNOWN) {
+typedef HRESULT(WINAPI* DSCreateFn)(LPCGUID, LPDIRECTSOUND*, LPUNKNOWN);
+static DSCreateFn SystemDirectSoundCreate() {
+    wchar_t path[MAX_PATH];
+    GetSystemDirectoryW(path, MAX_PATH); // SysWOW64 for this 32-bit process
+    wcscat_s(path, L"\\dsound.dll");
+    HMODULE m = LoadLibraryW(path);
+    return m ? (DSCreateFn)GetProcAddress(m, "DirectSoundCreate") : nullptr;
+}
+
+HRESULT WINAPI DirectSoundCreate(LPCGUID guid, LPDIRECTSOUND* out, LPUNKNOWN outer) {
+    if (!CfgBool("Audio", "Enabled", true)) {
+        // Audio engine disabled in the launcher: hand over to Windows' DirectSound.
+        static DSCreateFn sys = SystemDirectSoundCreate();
+        LOG("audio: SWGB Modern engine disabled, using system DirectSound");
+        return sys ? sys(guid, out, outer) : DSERR_NODRIVER;
+    }
     if (!out) return DSERR_INVALIDPARAM;
     g_eng.Start();
     *out = new DSound();

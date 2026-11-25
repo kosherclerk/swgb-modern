@@ -2,3 +2,5 @@ build/
 *.log
 src/launcher/**/bin/
 src/launcher/**/obj/
+src/launcher/Payload/
+dist/

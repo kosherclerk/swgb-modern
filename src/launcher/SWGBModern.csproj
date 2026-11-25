@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SWGBModern</AssemblyName>
+    <RootNamespace>SWGBModern</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>SWGB Modern</Product>
+    <Description>Compatibility and enhancement mod for Star Wars Galactic Battlegrounds</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Payload\ddraw.dll" LogicalName="payload/ddraw.dll" Condition="Exists('Payload\ddraw.dll')" />
+    <EmbeddedResource Include="Payload\dsound.dll" LogicalName="payload/dsound.dll" Condition="Exists('Payload\dsound.dll')" />
+    <EmbeddedResource Include="Payload\SWGBModern.ini" LogicalName="payload/SWGBModern.ini" Condition="Exists('Payload\SWGBModern.ini')" />
+  </ItemGroup>
+</Project>
