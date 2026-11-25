@@ -1,0 +1,4 @@
+build/
+*.log
+src/launcher/**/bin/
+src/launcher/**/obj/

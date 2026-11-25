@@ -1,0 +1,124 @@
+// Helpers shared by the Direct3D 10/11/12 backends.
+#pragma once
+#include "../renderer.h"
+#include <dxgi1_6.h>
+#include <d3dcompiler.h>
+
+namespace swgbm {
+
+template <class T> inline void SafeRelease(T*& p) { if (p) { p->Release(); p = nullptr; } }
+
+struct ShaderBlobs {
+    ID3DBlob* vs = nullptr;
+    ID3DBlob* psPal = nullptr;
+    ID3DBlob* psScale = nullptr;
+    ~ShaderBlobs() { SafeRelease(vs); SafeRelease(psPal); SafeRelease(psScale); }
+};
+
+inline bool CompileHlsl(ShaderBlobs& out, const char* vsProfile, const char* psProfile) {
+    static pD3DCompile compile = [] {
+        HMODULE m = LoadLibraryW(L"d3dcompiler_47.dll");
+        if (!m) m = LoadLibraryW(L"d3dcompiler_43.dll");
+        return m ? (pD3DCompile)GetProcAddress(m, "D3DCompile") : nullptr;
+    }();
+    if (!compile) { LOG("d3dcompiler not available"); return false; }
+    auto one = [&](const char* entry, const char* profile, ID3DBlob** blob) {
+        ID3DBlob* err = nullptr;
+        HRESULT hr = compile(g_hlslSource, strlen(g_hlslSource), "swgbm.hlsl", nullptr, nullptr, entry, profile,
+                             D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, blob, &err);
+        if (FAILED(hr)) {
+            LOG("HLSL compile %s (%s) failed: %s", entry, profile, err ? (const char*)err->GetBufferPointer() : "?");
+            SafeRelease(err);
+            return false;
+        }
+        SafeRelease(err);
+        return true;
+    };
+    return one("VSMain", vsProfile, &out.vs) && one("PSPalette", psProfile, &out.psPal) && one("PSScale", psProfile, &out.psScale);
+}
+
+inline ScaleConstants MakeScaleConstants(const Frame& f, const Viewport& vp, const PresentOptions& opt) {
+    ScaleConstants c = {};
+    c.srcSize[0] = (float)f.width; c.srcSize[1] = (float)f.height;
+    c.srcSize[2] = 1.0f / f.width; c.srcSize[3] = 1.0f / f.height;
+    c.dstSize[0] = (float)vp.w; c.dstSize[1] = (float)vp.h;
+    c.dstSize[2] = 1.0f / (vp.w ? vp.w : 1); c.dstSize[3] = 1.0f / (vp.h ? vp.h : 1);
+    c.filter = (int)opt.filter;
+    c.sharpness = opt.sharpness;
+    return c;
+}
+
+// Flip-model swapchain helper. `device` is the D3D10/11 device or the D3D12
+// command queue.
+struct DxgiSwap {
+    IDXGISwapChain1* swap = nullptr;
+    IDXGIFactory2* factory = nullptr;
+    HWND hwnd = nullptr;
+    int w = 0, h = 0;
+    UINT buffers = 2;
+    bool tearing = false;
+    bool flipModel = true;
+    UINT flags = 0;
+
+    ~DxgiSwap() { SafeRelease(swap); SafeRelease(factory); }
+
+    bool CreateSwapChain(IUnknown* device, HWND wnd, UINT bufferCount = 2, bool requireFlip = false) {
+        bool allowTearing = CfgBool("Display", "AllowTearing", true);
+        hwnd = wnd;
+        buffers = bufferCount;
+        HMODULE m = LoadLibraryW(L"dxgi.dll");
+        auto cf = m ? (HRESULT(WINAPI*)(UINT, REFIID, void**))GetProcAddress(m, "CreateDXGIFactory2") : nullptr;
+        if (cf) cf(0, IID_IDXGIFactory2, (void**)&factory);
+        if (!factory) {
+            auto cf1 = m ? (HRESULT(WINAPI*)(REFIID, void**))GetProcAddress(m, "CreateDXGIFactory1") : nullptr;
+            if (cf1) cf1(IID_IDXGIFactory2, (void**)&factory);
+        }
+        if (!factory) { LOG("DXGI: no IDXGIFactory2"); return false; }
+        IDXGIFactory5* f5 = nullptr;
+        if (SUCCEEDED(factory->QueryInterface(IID_IDXGIFactory5, (void**)&f5))) {
+            BOOL allow = FALSE;
+            if (SUCCEEDED(f5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(allow)))) tearing = allow != 0 && allowTearing;
+            f5->Release();
+        }
+        RECT rc;
+        GetClientRect(wnd, &rc);
+        w = rc.right > 0 ? rc.right : 1;
+        h = rc.bottom > 0 ? rc.bottom : 1;
+        DXGI_SWAP_CHAIN_DESC1 d = {};
+        d.Width = w; d.Height = h;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        d.BufferCount = buffers;
+        d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        d.Scaling = DXGI_SCALING_STRETCH;
+        d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+        d.Flags = flags;
+        HRESULT hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap);
+        if (FAILED(hr)) { d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap); }
+        if (FAILED(hr) && !requireFlip) {
+            d.SwapEffect = DXGI_SWAP_EFFECT_DISCARD; d.BufferCount = 1; d.Flags = flags = 0; tearing = false; flipModel = false;
+            hr = factory->CreateSwapChainForHwnd(device, wnd, &d, nullptr, nullptr, &swap);
+        }
+        if (FAILED(hr)) { LOG("DXGI CreateSwapChainForHwnd failed %08lx", hr); return false; }
+        factory->MakeWindowAssociation(wnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+        LOG("DXGI swapchain %dx%d flip=%d tearing=%d", w, h, flipModel, tearing);
+        return true;
+    }
+    bool NeedsResize(int cw, int ch) const { return cw != w || ch != h; }
+    bool Resize(int cw, int ch) {
+        HRESULT hr = swap->ResizeBuffers(0, cw, ch, DXGI_FORMAT_UNKNOWN, flags);
+        if (FAILED(hr)) { LOG("ResizeBuffers failed %08lx", hr); return false; }
+        w = cw; h = ch;
+        return true;
+    }
+    bool Present(bool vsync) {
+        UINT pf = (!vsync && tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        HRESULT hr = swap->Present(vsync ? 1 : 0, pf);
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) { LOG("DXGI device lost %08lx", hr); return false; }
+        return true;
+    }
+};
+
+} // namespace swgbm

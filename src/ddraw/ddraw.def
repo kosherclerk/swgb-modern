@@ -1,0 +1,10 @@
+LIBRARY ddraw
+EXPORTS
+    DirectDrawCreate = DirectDrawCreate@12
+    DirectDrawCreateEx = DirectDrawCreateEx@16
+    DirectDrawCreateClipper = DirectDrawCreateClipper@12
+    DirectDrawEnumerateA = DirectDrawEnumerateA@8
+    DirectDrawEnumerateW = DirectDrawEnumerateW@8
+    DirectDrawEnumerateExA = DirectDrawEnumerateExA@12
+    DllCanUnloadNow = DllCanUnloadNow@0 PRIVATE
+    DllGetClassObject = DllGetClassObject@12 PRIVATE
