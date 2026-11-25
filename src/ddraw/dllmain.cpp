@@ -2,6 +2,7 @@
 #include "window.h"
 #include "presenter.h"
 #include "patches.h"
+#include "audiofix.h"
 
 using namespace swgbm;
 
@@ -13,6 +14,7 @@ static void Init() {
     GameExe exe = DetectExe();
     LOG("SWGB Modern ddraw loaded into %s build", ExeName(exe));
     Window::InstallHooks();
+    AudioFix::Install();
     Patches::Apply(exe);
 }
 

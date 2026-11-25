@@ -21,6 +21,6 @@ echo "== ddraw.dll"
 $CXX $CXXFLAGS $DDRAW_SRC src/ddraw/ddraw.def -o $OUT/ddraw.dll $LDFLAGS -lgdi32 -luser32 -lole32 -luuid -ldxguid -lwinmm -ldwmapi -ldxguid -lopengl32 -lpsapi
 if [ -d src/dsound ] && ls src/dsound/*.cpp >/dev/null 2>&1; then
   echo "== dsound.dll"
-  $CXX $CXXFLAGS src/common/common.cpp src/dsound/*.cpp src/dsound/dsound.def -o $OUT/dsound.dll $LDFLAGS -lole32 -luuid -lwinmm -lavrt -lksuser
+  $CXX $CXXFLAGS src/common/common.cpp src/dsound/*.cpp src/dsound/dsound.def -o $OUT/dsound.dll $LDFLAGS -lole32 -luuid -lwinmm -lavrt -lksuser -ldxguid -luuid
 fi
 ls -la $OUT

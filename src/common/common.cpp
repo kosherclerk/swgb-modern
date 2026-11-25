@@ -1,6 +1,7 @@
 #include "common.h"
 #include <stdarg.h>
 #include <stdlib.h>
+#include <share.h>
 
 namespace swgbm {
 

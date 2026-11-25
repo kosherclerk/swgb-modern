@@ -1,0 +1,8 @@
+LIBRARY dsound
+EXPORTS
+    DirectSoundCreate = DirectSoundCreate@12 @1
+    DirectSoundEnumerateA = DirectSoundEnumerateA@8 @2
+    DirectSoundEnumerateW = DirectSoundEnumerateW@8 @3
+    DllCanUnloadNow = DllCanUnloadNow@0 @4 PRIVATE
+    DllGetClassObject = DllGetClassObject@12 @5 PRIVATE
+    SWGBM_SetVolume = SWGBM_SetVolume@4 @100
