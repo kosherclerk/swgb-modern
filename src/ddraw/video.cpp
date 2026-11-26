@@ -6,9 +6,8 @@
 // the same scaling as the game, with audio through the mod's audio engine.
 //
 // Sources, in order of preference:
-//   1. SWGBModern\hd\video\<name>.mp4  (AI-upscaled, if [Enhancements] HDVideos=1)
-//   2. <name>.avi through Video for Windows (needs the Indeo 5 codec, ir50_32)
-//   3. SWGBModern\video\<name>.mp4     (converted by the launcher with FFmpeg)
+//   1. <name>.avi through Video for Windows (needs the Indeo 5 codec, ir50_32)
+//   2. SWGBModern\video\<name>.mp4     (converted by the launcher with FFmpeg)
 // MP4 files are decoded with Media Foundation.
 #include "video.h"
 #include "presenter.h"
@@ -316,7 +315,6 @@ void Video::PlayIntros(HWND hwnd) {
     Window::Relayout();
     SetForegroundWindow(hwnd);
     std::string list = CfgStr("Video", "Intros", "xlogo1,xintro");
-    bool hd = CfgBool("Enhancements", "HDVideos", false);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     size_t a = 0;
     while (a <= list.size()) {
@@ -328,10 +326,8 @@ void Video::PlayIntros(HWND hwnd) {
         std::wstring name(n.begin(), n.end());
         std::wstring dir = GameDir();
         bool keepGoing = true, played = false;
-        std::wstring hdPath = dir + L"\\SWGBModern\\hd\\video\\" + name + L".mp4";
         std::wstring conv = dir + L"\\SWGBModern\\video\\" + name + L".mp4";
-        if (hd && FileExists(hdPath)) played = PlayMp4(hwnd, hdPath, keepGoing);
-        if (!played && FileExists(dir + L"\\" + name + L".avi")) played = PlayAvi(hwnd, dir + L"\\" + name + L".avi", keepGoing);
+        if (FileExists(dir + L"\\" + name + L".avi")) played = PlayAvi(hwnd, dir + L"\\" + name + L".avi", keepGoing);
         if (!played && FileExists(conv)) played = PlayMp4(hwnd, conv, keepGoing);
         if (!played) LOG("video: %ls could not be played (no decoder; the launcher can convert it)", name.c_str());
         if (!keepGoing) break;

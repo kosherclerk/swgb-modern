@@ -8,7 +8,6 @@
 #include "resources.h"
 #include "hook.h"
 #include "slp.h"
-#include "hdmenus.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -137,7 +136,6 @@ void* Fresh(const std::string& data, int* allocFlag, int* size) {
 void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* size) {
     void* p = g_orig(type, id, allocFlag, size);
     if (!p) return p;
-    if (type == 0x736c7020 /* 'slp ' */) HdMenus::OnSlpLoaded(p, (size_t)*size);
     if (type == 0x736c7020 /* 'slp ' */ && g_W > 0 && id >= 51141 && id <= 51148) {
         EnterCriticalSection(&g_lock);
         uint64_t key = ((uint64_t)type << 32) | id;

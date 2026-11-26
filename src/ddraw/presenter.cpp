@@ -1,7 +1,6 @@
 #include "presenter.h"
 #include "ddraw_impl.h"
 #include "window.h"
-#include "hdmenus.h"
 #include "textlayer.h"
 #include "effects.h"
 #include <algorithm>
@@ -290,25 +289,11 @@ void Presenter::Run() {
         LeaveCriticalSection(&ovLock_);
         if (forceFull && ovRender_.visible) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
         const Overlay* use = ovRender_.visible ? &ovRender_ : nullptr;
-        if (!use && have) {
-            bool wasHd = hdActive_;
-            hdActive_ = HdMenus::Compose(frame, hdOverlay_);
-            if (hdActive_) {
-                if (!wasHd || forceFull) { hdOverlay_.dirtyY0 = 0; hdOverlay_.dirtyY1 = hdOverlay_.height; }
-                ovDirty = ovDirty || hdOverlay_.dirtyY1 > hdOverlay_.dirtyY0 || !wasHd;
-                use = &hdOverlay_;
-            } else if (wasHd) {
-                ovDirty = true; // HD background went away
-            }
-        } else if (hdActive_) {
-            hdActive_ = false;
-            HdMenus::Invalidate();
-        }
-        // HD text on top of the HD menu (or on its own canvas at viewport resolution)
+        // HD text on its own canvas at viewport resolution
         Frame* show = &frame;
         if (use != &ovRender_ && have && TextLayer::Enabled() && !frame.text.empty()) {
             Viewport tvp = ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
-            const Overlay* base = hdActive_ ? &hdOverlay_ : nullptr;
+            const Overlay* base = nullptr;
             int cw = base ? base->width : std::max(1, tvp.w), chh = base ? base->height : std::max(1, tvp.h);
             float rx = base ? base->x : 0, ry = base ? base->y : 0, rw = base ? base->w : (float)frame.width, rh = base ? base->h : (float)frame.height;
             bool wasText = textActive_;

@@ -85,14 +85,6 @@
             <CheckBox Content="Upscaling filter instead of plain pixels (choose the filter on the Display tab)" IsChecked="{Binding EnhFilter}"/>
             <CheckBox Content="HD text: interface text drawn sharply at screen resolution" IsChecked="{Binding HdText}"/>
             <CheckBox Content="Smooth fog of war: even darkening instead of the black checkerboard pattern" IsChecked="{Binding SmoothFog}"/>
-            <CheckBox Content="HD menu backgrounds (AI-upscaled from the original art)" IsChecked="{Binding HdMenus}"/>
-            <CheckBox Content="HD intro videos (AI-upscaled from the original videos)" IsChecked="{Binding HdVideos}"/>
-            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-              <Button Content="Download HD pack" Click="DownloadHd_Click" IsEnabled="{Binding NotGenerating}"/>
-              <Button Content="Cancel" Click="CancelHd_Click" Visibility="{Binding Generating, Converter={StaticResource Vis}}"/>
-            </StackPanel>
-            <TextBlock Style="{StaticResource Hint}" Text="The HD pack (about 28 MB) is made once by the SWGB Modern project with the Real-ESRGAN x4plus upscaler and downloaded from the project's GitHub release. It is checked against a fixed checksum and installed into Game\SWGBModern; Uninstall removes it."/>
-            <TextBlock Style="{StaticResource Hint}" Text="{Binding HdStatus}"/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>

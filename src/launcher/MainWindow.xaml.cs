@@ -41,9 +41,7 @@ public partial class MainWindow : Window
         Closing += (_, _) => { try { _vm.SaveAll(); } catch { } };
     }
 
-    private CancellationTokenSource? _hdCts;
-    private async void DownloadHd_Click(object sender, RoutedEventArgs e) => await DownloadHdPack();
-    private void CancelHd_Click(object sender, RoutedEventArgs e) => _hdCts?.Cancel();
+    private CancellationTokenSource? _convCts;
 
     private void ProfileFaithful_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("faithful"); _vm.Status = "Faithful profile selected - press Save or Play."; }
     private void ProfileEnhanced_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("enhanced"); _vm.Status = "Enhanced profile selected - press Save or Play."; }
@@ -54,7 +52,7 @@ public partial class MainWindow : Window
         if (_vm.Prefs.Profile != null) return;
         var r = MessageBox.Show(this,
             "How would you like to play?\n\n" +
-            "YES - Enhanced: widescreen, smooth 60 fps rendering, upscaling filter, HD text, menus and videos.\n\n" +
+            "YES - Enhanced: widescreen, smooth 60 fps rendering, upscaling filter, HD text and smooth fog of war.\n\n" +
             "NO - Faithful: the original look (4:3, 20 fps redraw, plain pixels). Only compatibility fixes " +
             "(modern renderer, audio, crash and CPU fixes) are applied.\n\nYou can change every option later on the Components tab.",
             "SWGB Modern - choose a profile", MessageBoxButton.YesNo, MessageBoxImage.Question);
@@ -121,7 +119,7 @@ public partial class MainWindow : Window
     {
         if (_vm.SelectedGame == null) { MessageBox.Show(this, "No game executable found. Choose the game folder.", "SWGB Modern"); return; }
         if (!TryInstall(silent: true)) return;
-        await EnsurePacksForPlay();
+        await ConvertIntrosIfNeeded();
         try
         {
             string exe = _vm.SelectedGame.ExePath;
@@ -216,45 +214,30 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Before launch: fetch the packs the chosen options need (asking for the big one).</summary>
-    private async Task EnsurePacksForPlay()
+    /// <summary>Before launch: without the Indeo codec the intros need an H.264 copy, made once with FFmpeg.</summary>
+    private async Task ConvertIntrosIfNeeded()
     {
         var game = _vm.GameDir;
-        if (game == null || _vm.Generating) return;
-        if ((_vm.HdMenus || _vm.HdVideos) && !AssetPacks.Installed(game, AssetPacks.Hd))
+        if (game == null || !_vm.PlayIntro || _vm.Generating || !Intros.NeedConversion(game)) return;
+        if (!Intros.HaveFfmpeg)
         {
-            var r = MessageBox.Show(this, $"HD menus / videos are switched on, but the HD pack is not downloaded yet.\n\n" +
-                                          $"Download it now ({AssetPacks.SizeText(AssetPacks.Hd)})? Choose No to play without them.",
-                                    "SWGB Modern", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (r == MessageBoxResult.Yes) await InstallPack(AssetPacks.Hd, s => _vm.Status = s);
+            var r = MessageBox.Show(this, "The intro videos use the old Indeo codec, which Windows no longer includes.\n\n" +
+                                          "Download FFmpeg (about 100 MB, kept in your user folder) and convert them now? It takes a few seconds. " +
+                                          "Choose No to start without intro videos.", "SWGB Modern", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) return;
         }
-        bool hdIntros = _vm.HdVideos && AssetPacks.Installed(game, AssetPacks.Hd);
-        if (_vm.PlayIntro && !hdIntros && !AssetPacks.IndeoInstalled() && !AssetPacks.Installed(game, AssetPacks.Intros))
-            await InstallPack(AssetPacks.Intros, s => _vm.Status = s); // small; the game cannot decode the originals here
-    }
-
-    private async Task<bool> InstallPack(AssetPacks.Pack pack, Action<string> report)
-    {
-        var game = _vm.GameDir;
-        if (game == null) return false;
         _vm.Generating = true;
-        _hdCts = new CancellationTokenSource();
+        _convCts = new CancellationTokenSource();
+        var log = new Progress<string>(t => _vm.Status = t);
         try
         {
-            await AssetPacks.InstallAsync(game, pack, new Progress<string>(report), _hdCts.Token);
-            return true;
+            await Intros.EnsureFfmpegAsync(log, _convCts.Token);
+            await Intros.ConvertAsync(game, log, _convCts.Token);
+            _vm.Status = "Intro videos converted.";
         }
-        catch (OperationCanceledException) { report("Download cancelled."); }
-        catch (Exception ex) { report($"Download failed: {ex.Message}"); }
-        finally { _vm.Generating = false; _vm.RefreshHdStatus(); }
-        return false;
-    }
-
-    private async Task DownloadHdPack()
-    {
-        if (_vm.GameDir == null) { MessageBox.Show(this, "Choose the game folder first.", "SWGB Modern"); return; }
-        _vm.SaveAll();
-        if (await InstallPack(AssetPacks.Hd, s => _vm.HdStatus = s)) _vm.Status = "HD pack installed.";
+        catch (OperationCanceledException) { _vm.Status = "Cancelled."; }
+        catch (Exception ex) { _vm.Status = "Intro conversion failed: " + ex.Message; }
+        finally { _vm.Generating = false; }
     }
 
     private static string Trim(string s) => s.Length > 600 ? s[..600] + "..." : s;

@@ -191,29 +191,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
     public bool EnhSmooth { get => GameFps > 20; set { GameFps = value ? 60 : 20; MinimapMs = value ? 100 : 333; On(); } }
     public bool EnhFilter { get => Filter != "nearest"; set { Filter = value ? "xbr" : "nearest"; On(); } }
-    private bool _hdText, _hdMenus, _hdVideos, _playIntro = true, _smoothFog;
+    private bool _hdText, _playIntro = true, _smoothFog;
     public bool SmoothFog { get => _smoothFog; set => Set(ref _smoothFog, value); }
     public bool HdText { get => _hdText; set => Set(ref _hdText, value); }
-    public bool HdMenus { get => _hdMenus; set => Set(ref _hdMenus, value); }
-    public bool HdVideos { get => _hdVideos; set => Set(ref _hdVideos, value); }
     public bool PlayIntro { get => _playIntro; set => Set(ref _playIntro, value); }
-    private string _hdStatus = "";
-    public string HdStatus { get => _hdStatus; set => Set(ref _hdStatus, value); }
     private bool _generating;
     public bool Generating { get => _generating; set { Set(ref _generating, value); On(nameof(NotGenerating)); } }
     public bool NotGenerating => !Generating;
-
-    public void RefreshHdStatus()
-    {
-        if (GameDir == null) { HdStatus = ""; return; }
-        bool hd = AssetPacks.Installed(GameDir, AssetPacks.Hd);
-        var s = hd ? "HD pack installed." : $"HD pack not downloaded ({AssetPacks.SizeText(AssetPacks.Hd)}).";
-        if (!AssetPacks.IndeoInstalled())
-            s += AssetPacks.Installed(GameDir, AssetPacks.Intros) ? " Intro videos for Windows without the Indeo codec are installed."
-                                                                  : $" The Indeo codec is missing: playable copies of the intros ({AssetPacks.SizeText(AssetPacks.Intros)}) download on Play.";
-        if (!hd && (HdMenus || HdVideos)) s += " Press Download, or Play will offer it.";
-        HdStatus = s;
-    }
 
     public void ApplyProfile(string name)
     {
@@ -222,8 +206,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         EnhSmooth = enhanced;
         Filter = enhanced ? "xbr" : "nearest";
         HdText = enhanced;
-        HdMenus = enhanced;
-        HdVideos = enhanced;
         SmoothFog = enhanced;
         PanelStyle = "stretch";
         Prefs.Profile = name;
@@ -232,7 +214,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ProfileText => Prefs.Profile switch
     {
         "faithful" => "Faithful: original look, only compatibility fixes",
-        "enhanced" => "Enhanced: widescreen, smooth rendering, HD text, menus and videos",
+        "enhanced" => "Enhanced: widescreen, smooth rendering, HD text, smooth fog",
         _ => "Custom",
     };
 
@@ -291,14 +273,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         AudioEnabled = ini.GetBool("Audio", "Enabled", true);
         Log = ini.GetBool("Debug", "Log", false);
         HdText = ini.GetBool("Enhancements", "HDText", false);
-        HdMenus = ini.GetBool("Enhancements", "HDMenus", false);
-        HdVideos = ini.GetBool("Enhancements", "HDVideos", false);
         SmoothFog = ini.GetBool("Enhancements", "SmoothFog", false);
         PlayIntro = ini.GetBool("Video", "PlayIntro", true);
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
         CrashDumps = ini.GetBool("Debug", "CrashDumps", true);
         RefreshInstallState();
-        RefreshHdStatus();
     }
 
     private static string Pick(List<Choice> list, string value, string def) =>
@@ -354,8 +333,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Audio", "Limiter", Limiter);
         ini.Set("Debug", "Log", Log);
         ini.Set("Enhancements", "HDText", HdText);
-        ini.Set("Enhancements", "HDMenus", HdMenus);
-        ini.Set("Enhancements", "HDVideos", HdVideos);
         ini.Set("Enhancements", "SmoothFog", SmoothFog);
         ini.Set("Video", "PlayIntro", PlayIntro);
         ini.Set("Debug", "CrashDumps", CrashDumps);

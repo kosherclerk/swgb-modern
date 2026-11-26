@@ -44,8 +44,6 @@ private:
     Overlay ovShared_;        // written by producers under ovLock_
     bool ovChanged_ = false;
     Overlay ovRender_;        // presenter-thread copy handed to the backend
-    Overlay hdOverlay_;       // HD menu background composite
-    bool hdActive_ = false;
     Overlay textOverlay_;     // HD text canvas (on top of the HD menu when active)
     Frame fxDisp_;            // displayed frame after graphics enhancements (smooth fog)
     bool fxActive_ = false;

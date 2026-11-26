@@ -15,12 +15,11 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 - **Smoother rendering**: units move and the battlefield is redrawn up to 60 times per second instead of 20 (the same world-update change Expanding Fronts makes), and the minimap 10 times per second instead of 3. **Game speed is unchanged**, because units move by elapsed time (verified with the in-game clock).
 - Frame limiter tied to the monitor's refresh rate, plus VSync with tearing support. Unchanged frames are not re-presented, so the mod adds little CPU load.
 
-**Optional HD enhancements** (all off in the *Faithful* profile, on in *Enhanced*)
-- **HD text**: the interface text is drawn again with anti-aliased fonts at screen resolution, so it stays sharp at any scale.
-- **HD menu backgrounds**: the game's own menu art upscaled 4x with the Real-ESRGAN x4plus model. It is shown wherever the original background is visible, so buttons and highlights keep working.
-- **HD intro videos**: the intros upscaled the same way and played through the mod's renderer.
+**Optional enhancements** (all off in the *Faithful* profile, on in *Enhanced*)
+- **HD text**: the interface text is drawn again with anti-aliased fonts at screen resolution, so it stays sharp at any scale. Line breaks, spacing and alignment stay as in the original.
+- **Smooth fog of war**: fogged areas and the edge of the explored map are evenly darkened instead of drawn as a black checkerboard.
 
-The HD art is made once by the project and downloaded by the launcher as an optional pack (about 28 MB, verified by SHA-256), so nothing heavy runs on your PC. PCs without the old Indeo codec get small H.264 copies of the intros (5 MB) the same way.
+The mod ships no replacement art: everything on screen comes from your copy of the game.
 
 **Audio**
 - A DirectSound replacement on WASAPI: 32-bit float mixing at the device's native rate, band-limited **windowed-sinc resampling** of the 11/22 kHz game audio, a soft limiter, and following the Windows default device.
@@ -60,7 +59,7 @@ All settings are in `Game\SWGBModern.ini` (edited by the launcher; manual edits 
 | `[Widescreen] PanelStyle` | `stretch`, `center` |
 | `[Fixes] GameFPS` | battlefield redraw rate (original 20) |
 | `[Audio] Resampler` | `sinc`, `cubic`, `linear` |
-| `[Enhancements] HDText / HDMenus / HDVideos` | `0` / `1` |
+| `[Enhancements] HDText / SmoothFog` | `0` / `1` |
 | `[Video] PlayIntro` | `0` / `1` |
 
 Renderer changes apply the next time the game starts. Filter, scaling, window mode, VSync and frame limit apply immediately when the launcher saves.
@@ -69,7 +68,7 @@ Renderer changes apply the next time the game starts. Filter, scaling, window mo
 
 - `ddraw.dll` emulates the DirectDraw 1 API the Genie engine uses, with 8-bit surfaces in system memory. A presenter thread uploads each frame and its palette to the GPU, resolves the palette, and scales it in a shader. It also hooks the window and input APIs so the game always sees its own resolution.
 - Engine patches are applied **in memory** and only to executables identified byte-for-byte: Clone Campaigns 1.1 and the base game. Widescreen works through a hook on the engine's resource loader. It rewrites the interface layout table and generates wider panel art at runtime, so nothing is written to the game's data files.
-- HD text hooks `TextOutA`: each string's glyph pixels are tagged per surface, the tags travel with blits, and the presenter replaces the visible low-resolution glyphs with text rendered at output resolution in an overlay layer.
+- HD text hooks `TextOutA` and `DrawTextA`: each string's glyph pixels are tagged per surface, the tags travel with blits, and the presenter replaces the visible low-resolution glyphs with text rendered at output resolution in an overlay layer.
 - `dsound.dll` implements DirectSound buffers on top of a WASAPI mixer.
 - The launcher is a self-contained .NET 10 WPF app that embeds both DLLs.
 
@@ -82,14 +81,8 @@ Requirements: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (i686 target)
 ./package.sh 1.0.0    # launcher with embedded DLLs -> dist/SWGBModern.exe
 ```
 
-The optional asset packs are built by the maintainers with the launcher's maintainer switches (`--generate <game> menus|videos|convert <log>`, which download FFmpeg and Real-ESRGAN), then converted (menus: WebP quality 80 at 2880x2160, decoded by the bundled libwebp; videos: H.264 CRF 26, x264 veryslow) and zipped. The packs live in the `kosherclerk/swgb-modern-assets` release `assets-1`; while that repository is private, set `SWGBM_GITHUB_TOKEN` to download. Their SHA-256 sums are pinned in `src/launcher/Core/AssetPacks.cs`.
-
 `tools/sigfind.py` locates engine patch sites in other builds of the game executable using masked byte signatures.
 
 ## License
 
 MIT, see [LICENSE](LICENSE). The xBR filter is an independent implementation of Hyllian's algorithm (MIT).
-
-## Third-party code
-
-- `third_party/libwebp`: decoder subset of [libwebp](https://github.com/webmproject/libwebp) 1.6.0, BSD-3-Clause (see its `COPYING`).
