@@ -68,12 +68,14 @@ struct ExeLayout {
     uintptr_t viewInterval, mapInterval;   // game screen redraw throttles
     uintptr_t worldStep;                   // world update: "cmp eax,32h" (minimum ms between updates)
     uintptr_t blitter, blitState;          // masked sprite blitter (THIS_COD) and its state (THIS_DAT)
+    uintptr_t scroll[2];                   // camera scroll amount (edge / keyboard): "fildll; fidivl" step
+    uintptr_t scrollAlign;                 // map view: scroll shift rounded to 8 px ("test cl,7")
     uint32_t layoutTableId;                // "Resolution Specific Rects" table
     std::vector<ImmSite> sites;            // 1280x1024 mode identification
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, {0x616cdc, 0x6170b9}, 0x60b729, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -87,7 +89,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, {0x61304c, 0x613429}, 0x607a99, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -124,9 +126,56 @@ void ApplyFrameRate(const ExeLayout& L) {
         std::max<uint32_t>(10, view), c ? "ok" : "skipped", view, a ? "ok" : "skipped", map, b ? "ok" : "skipped");
 }
 
+// Smooth camera. Three things made scrolling jump:
+//  - both scroll routines (mouse at the screen edge, arrow keys) compute the
+//    distance as elapsed / scroll interval, then round it DOWN to a multiple
+//    of half a tile and only remember the time when they moved: half a tile
+//    (48 px) about every 50 ms whatever the frame rate. The rounding is
+//    skipped, so the camera moves the exact distance every frame (scaled by
+//    ScrollSpeedPct, since the rounding used to lose some distance);
+//  - the first frame of a scroll jumped a whole tile; now a small fraction;
+//  - the map view shifts its already drawn image in steps of 8 px and keeps
+//    the rest as an offset (it keeps the screen-anchored fog checkerboard
+//    aligned; smaller steps leave seams in it). With smooth fog there is no
+//    checkerboard, so the view moves in 1 px steps.
+float g_scrollStart = 0.1f, g_scrollScale = 0.80f;
+void ApplySmoothScroll(const ExeLayout& L) {
+    if (!CfgBool("Fixes", "SmoothScroll", true)) return;
+    g_scrollStart = std::max(0.02f, std::min(1.0f, CfgInt("Fixes", "ScrollStartPct", 10) / 100.0f));
+    g_scrollScale = std::max(0.25f, std::min(4.0f, CfgInt("Fixes", "ScrollSpeedPct", 80) / 100.0f));
+    static const uint8_t calc[] = {0xDF, 0x6C, 0x24, 0x10, 0x89, 0x44, 0x24, 0x10, 0x89, 0x4C, 0x24, 0x14, 0xDA, 0x74, 0x24, 0x10, 0xD9, 0xC0, 0xE8};
+    int ok = 0;
+    for (uintptr_t m : L.scroll) {
+        static const uint8_t fldStart[] = {0xD9, 0x05};
+        if (!PatchCheck(m, calc, sizeof(calc)) || !PatchCheck(m - 0x16, fldStart, 2)) continue;
+        // fld st0; call ftol (7 bytes) -> jmp stub: fmul [scale]; jmp clamp (m+0x46)
+        auto stub = (uint8_t*)VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        uint32_t scaleAddr = (uint32_t)(uintptr_t)&g_scrollScale;
+        stub[0] = 0xD8; stub[1] = 0x0D; memcpy(stub + 2, &scaleAddr, 4);             // fmul dword [g_scrollScale]
+        stub[6] = 0xE9; int32_t back = (int32_t)((m + 0x46) - ((uintptr_t)stub + 11)); memcpy(stub + 7, &back, 4);
+        uint8_t jmp[7] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};
+        int32_t to = (int32_t)((uintptr_t)stub - (m + 0x10 + 5)); memcpy(jmp + 1, &to, 4);
+        uint32_t startAddr = (uint32_t)(uintptr_t)&g_scrollStart;
+        if (PatchBytes((void*)(m + 0x10), jmp, sizeof(jmp)) && PatchBytes((void*)(m - 0x16 + 2), &startAddr, 4)) ok++;
+    }
+    static const uint8_t align[] = {0xF6, 0xC1, 0x07, 0x74, 0x21, 0x33, 0xFF, 0x66, 0x3B, 0xCF, 0x7F, 0x03, 0x8D, 0x70, 0x07, 0x83, 0xE6, 0xF8};
+    static const uint8_t alignY[] = {0xF6, 0xC3, 0x07, 0x74, 0x1E, 0x66, 0x3B, 0xDF, 0x8B, 0xC2, 0x7F, 0x03, 0x8D, 0x42, 0x07, 0x24, 0xF8};
+    const char* how = "unchanged";
+    if (PatchCheck(L.scrollAlign, align, sizeof(align)) && PatchCheck(L.scrollAlign + 40, alignY, sizeof(alignY))) {
+        if (CfgBool("Enhancements", "SmoothFog", false)) {
+            const uint8_t j = 0xEB;                                // never round the shift
+            PatchBytes((void*)(L.scrollAlign + 3), &j, 1);
+            PatchBytes((void*)(L.scrollAlign + 43), &j, 1);
+            how = "1 px";
+        } else how = "8 px (kept for the fog checkerboard)";
+    }
+    LOG("smooth scroll: %d of 2 scroll routines patched, view steps %s, speed %d%%", ok, how, (int)(g_scrollScale * 100 + 0.5f));
+}
+
 void ApplyEngine(const ExeLayout& L) {
     LOG("engine patches for %s", L.name);
     ApplyFrameRate(L);
+    ApplySmoothScroll(L);
     Effects::InstallEngineHooks(L.blitter, L.blitState);
     int W = CfgInt("Display", "GameWidth", 0), H = CfgInt("Display", "GameHeight", 0);
     bool widescreen = CfgBool("Fixes", "Widescreen", true) && W >= 800 && H >= 600 && !(W == 1280 && H == 1024);

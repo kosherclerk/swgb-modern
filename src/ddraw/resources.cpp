@@ -40,13 +40,16 @@ std::vector<std::string> Split(const std::string& s, char sep) {
     return out;
 }
 
-// Panel geometry (1280 layout): left of kSplit = unit grid (anchored left),
-// right of it = info/minimap/buttons (anchored right); the central info panel
-// spanning the split stretches. "center" keeps the 1280 panel centred instead.
-struct PanelGeom { bool stretch; int split; int strip; };
+// Panel geometry (1280 layout). The in-game panel is three blocks: the unit
+// grid (left), the info panel with the Tech Level box on top (centre) and the
+// minimap/buttons (right). "stretch" widens the info panel the way Expanding
+// Fronts does: rects that start in the right block move right by the extra
+// width, rects that reach into the stretch zone widen, the left block stays.
+// "center" keeps the 1280 panel centred instead.
+struct PanelGeom { bool stretch; int zoneL, zoneR; };
 PanelGeom Geom() {
-    return {CfgStr("Widescreen", "PanelStyle", "stretch") != "center", CfgInt("Widescreen", "PanelSplitX", 436),
-            std::max(4, CfgInt("Widescreen", "PanelStripW", 16))};
+    return {CfgStr("Widescreen", "PanelStyle", "stretch") != "center", CfgInt("Widescreen", "PanelZoneLeft", 436),
+            CfgInt("Widescreen", "PanelZoneRight", 690)};
 }
 
 std::string RewriteLayout(const std::string& src, int W, int H) {
@@ -73,8 +76,8 @@ std::string RewriteLayout(const std::string& src, int W, int H) {
             else {
                 y += dy;
                 if (!g.stretch) x += dx;
-                else if (x >= g.split) x += extra;
-                else if (x + w > g.split) w += extra;
+                else if (x >= g.zoneR) x += extra;
+                else if (x + w > g.zoneL) w += extra;
             }
             f[9] = std::to_string(x); f[10] = std::to_string(y); f[11] = std::to_string(w); f[12] = std::to_string(h);
             rows++;
@@ -87,32 +90,74 @@ std::string RewriteLayout(const std::string& src, int W, int H) {
     return out;
 }
 
-// Widen a 1280x250 in-game panel SLP to W, keeping the original art centred
-// and extending both sides by tiling a plain structural strip of the panel.
+// Interface palette (for colour distances when choosing the seam); empty if
+// it can't be loaded, then pixels only compare equal / different.
+std::vector<uint32_t> g_pal;
+void LoadPalette();
+
+int PixDist(int16_t a, int16_t b) {
+    if (a == b) return 0;
+    if (a < 0 || b < 0 || g_pal.size() != 256) return 255;
+    uint32_t p = g_pal[a], q = g_pal[b];
+    return abs((int)(p >> 16 & 255) - (int)(q >> 16 & 255)) + abs((int)(p >> 8 & 255) - (int)(q >> 8 & 255)) + abs((int)(p & 255) - (int)(q & 255));
+}
+
+// Widen a 1280x250 in-game panel SLP to W. "stretch": find the plainest
+// connected vertical path through the info panel (one pixel per row, moving at
+// most one column between rows, lowest local detail; dynamic programming) and
+// repeat that path's pixel on each row. The path runs between ornaments, so
+// corner pieces, buttons and emblems keep their shape while plain frame,
+// background and the Tech Level box get longer, as in Expanding Fronts.
+// "center": the original art centred, both sides filled from a plain strip.
 std::string WidenPanel(const uint8_t* data, size_t size, int W, int H) {
     std::vector<SlpFrame> fr;
     if (!SlpDecode(data, size, fr) || fr.empty() || fr[0].w != 1280) return std::string();
-    const SlpFrame& o = fr[0];
+    SlpFrame& o = fr[0];
     const PanelGeom g = Geom();
     const int extra = W - 1280, dx = extra / 2;
     SlpFrame n;
     n.w = W; n.h = o.h; n.hx = 0; n.hy = -(H - o.h);
     n.px.assign((size_t)n.w * n.h, -1);
-    const int s0 = CfgInt("Widescreen", "FillStripX", 236), sw = CfgInt("Widescreen", "FillStripW", 56);
-    for (int y = 0; y < n.h; y++) {
-        const int16_t* row = &o.px[(size_t)y * 1280];
-        for (int x = 0; x < n.w; x++) {
-            int16_t v;
-            if (g.stretch) {
-                if (x < g.split) v = row[x];
-                else if (x < g.split + extra) v = row[g.split + ((x - g.split) % g.strip)];
-                else v = row[x - extra];
-            } else {
-                int sx = x - dx;
-                if (sx >= 0 && sx < 1280) v = row[sx];
-                else v = row[s0 + (sx < 0 ? (sw - 1 - ((-sx - 1) % sw)) : ((sx - 1280) % sw))];
+    if (g.stretch) {
+        LoadPalette();
+        const int lo = std::max(1, CfgInt("Widescreen", "SeamLeft", 300)), hi = std::min(1278, CfgInt("Widescreen", "SeamRight", g.zoneR));
+        const int cw = hi - lo, h = o.h;
+        std::vector<int> cost((size_t)cw * h), from((size_t)cw * h);
+        for (int y = 0; y < h; y++)
+            for (int i = 0; i < cw; i++) {
+                int x = lo + i;
+                int e = PixDist(o.at(x, y), o.at(x - 1, y)) + PixDist(o.at(x, y), o.at(x + 1, y));
+                if (y == 0) { cost[i] = e; from[i] = i; continue; }
+                int best = INT_MAX, bi = i;
+                for (int d = -1; d <= 1; d++) {
+                    int j = i + d;
+                    if (j < 0 || j >= cw) continue;
+                    int c = cost[(size_t)(y - 1) * cw + j] + (d ? 1 : 0);   // small penalty for shearing
+                    if (c < best) { best = c; bi = j; }
+                }
+                cost[(size_t)y * cw + i] = best + e;
+                from[(size_t)y * cw + i] = bi;
             }
-            n.at(x, y) = v;
+        int i = 0;
+        for (int k = 1; k < cw; k++) if (cost[(size_t)(h - 1) * cw + k] < cost[(size_t)(h - 1) * cw + i]) i = k;
+        std::vector<int> seam(h);
+        for (int y = h - 1; y >= 0; y--) { seam[y] = lo + i; i = from[(size_t)y * cw + i]; }
+        for (int y = 0; y < h; y++) {
+            const int16_t* row = &o.px[(size_t)y * 1280];
+            int16_t* out = &n.px[(size_t)y * W];
+            int s = seam[y];
+            memcpy(out, row, (s + 1) * sizeof(int16_t));
+            for (int k = 0; k < extra; k++) out[s + 1 + k] = row[s];
+            memcpy(out + s + 1 + extra, row + s + 1, (1280 - s - 1) * sizeof(int16_t));
+        }
+    } else {
+        const int s0 = CfgInt("Widescreen", "FillStripX", 236), sw = CfgInt("Widescreen", "FillStripW", 56);
+        for (int y = 0; y < n.h; y++) {
+            const int16_t* row = &o.px[(size_t)y * 1280];
+            for (int x = 0; x < n.w; x++) {
+                int sx = x - dx;
+                n.at(x, y) = (sx >= 0 && sx < 1280) ? row[sx] : row[s0 + (sx < 0 ? (sw - 1 - ((-sx - 1) % sw)) : ((sx - 1280) % sw))];
+            }
         }
     }
     return SlpEncode({n});
@@ -131,6 +176,28 @@ void* Fresh(const std::string& data, int* allocFlag, int* size) {
     *allocFlag = 1;
     *size = (int)data.size();
     return m;
+}
+
+// The interface palette (JASC text, bina 50500) fetched through the engine's
+// own getter, once.
+void LoadPalette() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    int alloc = 0, size = 0;
+    const char* p = (const char*)g_orig(0x62696e61 /* 'bina' */, 50500, &alloc, &size);
+    if (!p || size <= 0) return;
+    std::istringstream in(std::string(p, (size_t)size));
+    std::string magic, ver; int count = 0;
+    in >> magic >> ver >> count;
+    if (magic == "JASC-PAL" && count == 256) {
+        std::vector<uint32_t> pal(256);
+        bool ok = true;
+        for (int i = 0; i < 256 && ok; i++) { int r, g, b; ok = (bool)(in >> r >> g >> b); pal[i] = (uint32_t)(r << 16 | g << 8 | b); }
+        if (ok) g_pal = pal;
+    }
+    if (alloc == 1 && g_gameFree) g_gameFree((void*)p);
+    LOG("widescreen: interface palette %s", g_pal.empty() ? "not found (seam by index)" : "loaded");
 }
 
 void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* size) {
