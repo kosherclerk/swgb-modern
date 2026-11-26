@@ -114,3 +114,22 @@ The engine writes bytes directly into 8-bit surfaces. Those surfaces are ours (S
 | C. HD sprite layer | Hook the sprite and terrain drawers to tag pixels with *sprite, frame, player, position* (the HD-text mechanism generalised). The presenter replaces tagged pixels with true-colour high-resolution versions made offline (AI upscale + de-dither, player colour from masks) | Large: engine hooks are medium, but the assets are big (about 100k frames; 4x upscale ~7 Gpx, likely 1-3 GB even compressed) | "DE-like" sharp true-colour units, buildings and terrain, while the engine stays 8-bit internally (multiplayer-safe) |
 
 B is the realistic first step and matches the "optional, original stays default" requirement. It reuses the overlay and tag-plane code. C builds on B's hooks and can grow incrementally (for example terrain first, then buildings, then units) with downloadable packs.
+
+## 7. Implementation status
+
+### B. Effects layer: done for fog
+- All six renderers now have a **shade plane**: a per-pixel colour multiplier (value/128) applied right after the palette lookup, before any scaling filter. It is neutral (exactly 1.0) unless an effect uses it. The renderer matrix is still pixel-exact with it.
+- **Smooth fog** (`[Enhancements] SmoothFog`, `FogBrightness=73`):
+  - The engine's two stipple-pattern setters (CC `0x651780`/`0x6517c0`, base game `0x64e780`/`0x64e7c0`) are replaced, so the black fog stipple is written as marker index 48. That index is black too, so the original look is kept wherever the marker isn't processed.
+  - The presenter gives each stippled pixel its neighbour's colour and darkens the area evenly to 73%. That is the brightness a 50% black checkerboard is perceived at.
+  - This covers both the fog of war and the explored-map edge band.
+- **Shadows** need no stipple fix: they come from `SHADOW.COL` (smooth, no dither). True-colour shadows and hill lighting need per-pixel knowledge of *what* was drawn. That is the same tagging C needs, so they will be built on C's hooks.
+
+### C. HD sprite layer: engine entry points found
+- Sprite drawer: `0x5430c0` (thiscall on the sprite object, `ret 0x14`: draw area, x, y, frame, flags; 92 call sites). The object holds the SLP data pointer (`+0x0c`), the loaded flag (`+0x14`) and the frame count (`+0x18`). Frame *n*'s header is at SLP + 32·(n+1). Draw modes come from the global `0x77fa60`: bit 2 is the fog stipple, bit 3 is the colour-tint pattern.
+- Second sprite entry: `0x543270` (2 call sites). Terrain tiles go through the terrain drawer (`0x60e000-0x60f4xx`), which calls the same blitter `0x651bc0`.
+- Plan:
+  1. Hook these to record each draw (SLP resource id via the resource-getter hook, frame, x/y, mirroring, player colour table, mode).
+  2. Write an *object tag* per covered pixel into the surface's tag plane (reusing the HD-text tag plane), using the SLP frame's own coverage. Later draws overwrite earlier ones, so occlusion is exact.
+  3. The presenter replaces tagged pixels with the matching HD frame (true colour, 4x, player colour from a mask channel), sampled at output resolution.
+- Assets: about 100k unit/building frames and 3,562 terrain frames. They would be produced offline (AI upscale + de-dither) and shipped as optional packs, most likely by category (terrain, buildings, units).
