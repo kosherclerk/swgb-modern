@@ -12,7 +12,7 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 - **True widescreen in game** (for example 1920×1080). The game's own UI layout is rebuilt for the new width: the command panel stretches like a native widescreen UI, or you can keep the original panel centred. Menus remain 800×600 and are scaled.
 - **UI scaling**: choose your native resolution and a scale factor. The launcher shows which scales are pixel-perfect and which one is closest to the original interface size. Per-monitor DPI aware.
 - **Upscaling filters**: Nearest (lossless), Sharp-bilinear, Bilinear, and **xBR** (an edge-directed pixel-art upscaler).
-- **Smoother rendering**: the battlefield is redrawn up to 60 times per second instead of 20, and the minimap 10 times per second instead of 3. **Game speed is unchanged**, because the simulation runs on real time (verified with the in-game clock).
+- **Smoother rendering**: units move and the battlefield is redrawn up to 60 times per second instead of 20 (the same world-update change Expanding Fronts makes), and the minimap 10 times per second instead of 3. **Game speed is unchanged**, because units move by elapsed time (verified with the in-game clock).
 - Frame limiter tied to the monitor's refresh rate, plus VSync with tearing support. Unchanged frames are not re-presented, so the mod adds little CPU load.
 
 **Optional HD enhancements** (all off in the *Faithful* profile, on in *Enhanced*)

@@ -64,12 +64,13 @@ struct ExeLayout {
     uintptr_t enterGameRes;                // "enter game resolution" function
     uintptr_t resGetter, gameFree;         // DRS resource getter, engine CRT free()
     uintptr_t viewInterval, mapInterval;   // game screen redraw throttles
+    uintptr_t worldStep;                   // world update: "cmp eax,32h" (minimum ms between updates)
     uint32_t layoutTableId;                // "Resolution Specific Rects" table
     std::vector<ImmSite> sites;            // 1280x1024 mode identification
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x4f2fd7, 0x4f2f17, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x4f2fd7, 0x4f2f17, 0x61e92a, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -83,7 +84,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x4f1c57, 0x4f1b97, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x4f1c57, 0x4f1b97, 0x61acaa, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -96,16 +97,28 @@ const ExeLayout kBaseGame = {
         {0x5d499e, 0x500, 'W'}, {0x5d51a5, 0x500, 'W'}, {0x5d5d48, 0x500, 'W'},
     }};
 
-// Smooth rendering: the game screen redraws its main view at most every
-// 100 ms and the minimap every 333 ms (on top of the 50 ms WM_TIMER that
-// window.cpp shortens). Rendering only; the simulation runs on elapsed time.
+// Smooth motion. Three limits keep the original game at 20 fps:
+//  - the world update (unit positions, animation frames) runs at most every
+//    50 ms: "cmp eax,32h / jae update" in the world update function. Units
+//    move by elapsed time, so a shorter step only gives more, smaller steps;
+//    game speed is unchanged. (Expanding Fronts ships the same change, 16 ms.)
+//  - the game screen redraws its main view at most every 100 ms and the
+//    minimap every 333 ms;
+//  - the 50 ms WM_TIMER that drives redraws (shortened in window.cpp).
 void ApplyFrameRate(const ExeLayout& L) {
     int fps = CfgInt("Fixes", "GameFPS", 60);
     if (fps <= 20 || fps > 240) return;
     uint32_t view = (uint32_t)(1000 / fps);
     uint32_t map = (uint32_t)std::max(50, std::min(333, CfgInt("Fixes", "MinimapRefreshMs", 100)));
     bool a = PatchImm(L.viewInterval, 0x64, view), b = PatchImm(L.mapInterval, 0x14d, map);
-    LOG("frame rate: main view redraw 100 -> %u ms (%s), minimap 333 -> %u ms (%s)", view, a ? "ok" : "skipped", map, b ? "ok" : "skipped");
+    bool c = false;
+    const uint8_t cmp50[] = {0x83, 0xF8, 0x32, 0x73};
+    if (PatchCheck(L.worldStep, cmp50, sizeof(cmp50))) {
+        uint8_t step = (uint8_t)std::max<uint32_t>(10, view);
+        c = PatchBytes((void*)(L.worldStep + 2), &step, 1);
+    }
+    LOG("frame rate: world update 50 -> %u ms (%s), main view redraw 100 -> %u ms (%s), minimap 333 -> %u ms (%s)",
+        std::max<uint32_t>(10, view), c ? "ok" : "skipped", view, a ? "ok" : "skipped", map, b ? "ok" : "skipped");
 }
 
 void ApplyEngine(const ExeLayout& L) {

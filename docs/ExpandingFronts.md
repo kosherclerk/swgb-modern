@@ -27,7 +27,7 @@
 
 ## EF ideas adopted (reimplemented independently, no EF code or assets)
 
-1. **60 FPS rendering.** The engine redraws the world from a 50 ms `WM_TIMER` (`SetTimer(hwnd, 1, 50)` at `0x4251c5`), and on top of that the game screen throttles the main view to 100 ms (`0x4f2fd7`) and the minimap to 333 ms (`0x4f2f17`). SWGB Modern retargets all three (`[Fixes] GameFPS=60`, `MinimapRefreshMs=100`). Measured: distinct frames with units moving went from about 13/s to about 22/s (the rest is limited by the simulation turn rate). The in-game clock still advances at the same 1.5× "Normal" speed at 15, 20 and 60 fps.
+1. **60 FPS.** Three limits hold the original game at 20 fps. (a) The world update function (`0x61e7f0` in Clone Campaigns, unit positions and animation) returns early when less than 50 ms passed since the last update: `cmp eax,32h` at `0x61e92a` (base game `0x61acaa`). (b) The game screen throttles the main view to 100 ms (`0x4f2fd7`) and the minimap to 333 ms (`0x4f2f17`). (c) A 50 ms `WM_TIMER` (`SetTimer(hwnd, 1, 50)` at `0x4251c5`). EF's `battlegrounds_x2.exe` ships (a) as 16 ms; with EF's "Enable FPS" off, efpatch sets it to 32 ms. With it on, efpatch also sets the minimap to 100 ms and a 500-2000 ms panel refresh (`0x5ddb73`) to 100 ms (found by diffing EF's patched code in memory with the option on and off). SWGB Modern applies (a), (b) and (c) for `[Fixes] GameFPS=60`. Measured with a unit walking: 59.8 distinct frames/s (22.7/s at 20). Units move by elapsed time, so the in-game clock still advances at the same 1.5x "Normal" speed at 20 and 60 fps.
 2. **Widescreen panel layout.** EF keeps the unit grid anchored left, the minimap and buttons anchored right, and widens the centre info panel. SWGB Modern now does the same at runtime: it rewrites the "Resolution Specific Rects" table (resource 53290) and generates wider panel SLPs in memory. Nothing is written to disk, so there's no "first run" step and no permission problems. `[Widescreen] PanelStyle=stretch|center`.
 3. **Auto resolution.** The launcher will default the game resolution from the monitor and the chosen integer scale.
 4. **Crash reports.** These are local minidumps in `Game\CrashDumps` instead of uploads, and are disabled under EF, which has its own reporter.
@@ -54,4 +54,4 @@ These are from EF's own troubleshooting section:
 ## EF ideas not adopted (yet)
 
 - Keydown object hotkeys, DirectWrite text, the large-maps (640×640) experiment, scenario-editor unlocks and autosave, and EF's content and AI fixes. These are either game-content changes or need deeper engine work with multiplayer-sync risk.
-- Raising the simulation turn rate (beyond the render rate). It changes simulation granularity and would need multiplayer validation.
+- Changing the multiplayer turn length. The world update step (above) is the same change EF ships for multiplayer games.
