@@ -32,14 +32,18 @@ public partial class MainWindow : Window
             }
             else
             {
-                if (_vm.GameDir != null) AskProfileIfFirstRun();
+                // let the window paint before the first-run question appears
+                if (_vm.GameDir != null)
+                    await Dispatcher.InvokeAsync(AskProfileIfFirstRun, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 if (_vm.CheckUpdates) await CheckForUpdates(interactive: false);
             }
         };
         Closing += (_, _) => { try { _vm.SaveAll(); } catch { } };
     }
 
+    private CancellationTokenSource? _hdCts;
     private async void GenerateHd_Click(object sender, RoutedEventArgs e) => await GenerateHdAssets();
+    private void CancelHd_Click(object sender, RoutedEventArgs e) => _hdCts?.Cancel();
 
     private void ProfileFaithful_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("faithful"); _vm.Status = "Faithful profile selected - press Save or Play."; }
     private void ProfileEnhanced_Click(object sender, RoutedEventArgs e) { _vm.ApplyProfile("enhanced"); _vm.Status = "Enhanced profile selected - press Save or Play."; }
@@ -113,10 +117,11 @@ public partial class MainWindow : Window
         catch (Exception ex) { Error("Uninstall failed", ex); }
     }
 
-    private void Play_Click(object sender, RoutedEventArgs e)
+    private async void Play_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.SelectedGame == null) { MessageBox.Show(this, "No game executable found. Choose the game folder.", "SWGB Modern"); return; }
         if (!TryInstall(silent: true)) return;
+        await ConvertIntrosIfNeeded();
         try
         {
             string exe = _vm.SelectedGame.ExePath;
@@ -125,7 +130,9 @@ public partial class MainWindow : Window
             {
                 WorkingDirectory = Path.GetDirectoryName(exe)!,
                 UseShellExecute = false,
-                Arguments = _vm.SkipIntro ? "NOSTARTUP" : "",
+                // The game's own intro player does not work on modern Windows;
+                // the mod plays the intros itself ([Video] PlayIntro).
+                Arguments = "NOSTARTUP",
             };
             Process.Start(psi);
             _vm.Status = $"Started {_vm.SelectedGame.Name}.";
@@ -209,10 +216,66 @@ public partial class MainWindow : Window
         }
     }
 
-    private Task GenerateHdAssets()
+    /// <summary>Without the Indeo codec the intros need an H.264 copy (made with FFmpeg).</summary>
+    private async Task ConvertIntrosIfNeeded()
     {
-        _vm.HdStatus = "HD asset generation is not available in this build yet.";
-        return Task.CompletedTask;
+        var game = _vm.GameDir;
+        if (game == null || !_vm.PlayIntro || HdAssets.IndeoInstalled() || HdAssets.ConvertedIntrosPresent(game) || _vm.Generating) return;
+        if (_vm.HdVideos && HdAssets.HdVideoCount(game) == HdAssets.IntroSources(game).Count()) return;
+        if (!HdAssets.HaveFfmpeg)
+        {
+            var r = MessageBox.Show(this, "The intro videos use the Indeo codec, which is not installed on this PC.\n\n" +
+                                          "Download FFmpeg (about 100 MB, kept in your user folder) and convert them now? " +
+                                          "Choose No to start without intro videos.", "SWGB Modern", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) return;
+        }
+        _vm.Generating = true;
+        _hdCts = new CancellationTokenSource();
+        var log = new Progress<string>(s => _vm.Status = s);
+        try
+        {
+            await HdAssets.EnsureToolsAsync(needEsrgan: false, log, _hdCts.Token);
+            await HdAssets.ConvertIntrosAsync(game, log, _hdCts.Token);
+            _vm.Status = "Intro videos converted.";
+        }
+        catch (OperationCanceledException) { _vm.Status = "Cancelled."; }
+        catch (Exception ex) { _vm.Status = "Intro conversion failed: " + ex.Message; }
+        finally { _vm.Generating = false; _vm.RefreshHdStatus(); }
+    }
+
+    private async Task GenerateHdAssets()
+    {
+        var game = _vm.GameDir;
+        if (game == null) { MessageBox.Show(this, "Choose the game folder first.", "SWGB Modern"); return; }
+        bool menus = _vm.HdMenus, videos = _vm.HdVideos;
+        if (!menus && !videos)
+        {
+            MessageBox.Show(this, "Tick 'HD menu backgrounds' and/or 'HD intro videos' first.", "SWGB Modern");
+            return;
+        }
+        bool needTools = !HdAssets.HaveFfmpeg || !HdAssets.HaveEsrgan;
+        var what = string.Join(" and ", new[] { menus ? "menu backgrounds" : null, videos ? "intro videos" : null }.Where(x => x != null));
+        var msg = $"Generate HD {what} with the Real-ESRGAN x4plus upscaler?\n\n" +
+                  (needTools ? "FFmpeg (gyan.dev) and Real-ESRGAN (GitHub) will be downloaded first, about 130 MB, into\n" + HdAssets.ToolsDir + "\n\n" : "") +
+                  "The menus take under a minute; the videos can take 10 minutes or more depending on your graphics card.";
+        if (MessageBox.Show(this, msg, "SWGB Modern", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+        _vm.SaveAll();
+        _vm.Generating = true;
+        _hdCts = new CancellationTokenSource();
+        var ct = _hdCts.Token;
+        var log = new Progress<string>(s => _vm.HdStatus = s);
+        try
+        {
+            await HdAssets.EnsureToolsAsync(needEsrgan: true, log, ct);
+            if (menus) await HdAssets.GenerateMenusAsync(game, log, ct);
+            if (videos) await HdAssets.GenerateHdVideosAsync(game, log, ct);
+            if (!HdAssets.IndeoInstalled() && !HdAssets.ConvertedIntrosPresent(game)) await HdAssets.ConvertIntrosAsync(game, log, ct);
+            _vm.RefreshHdStatus();
+            _vm.Status = "HD assets generated.";
+        }
+        catch (OperationCanceledException) { _vm.RefreshHdStatus(); _vm.Status = "HD generation cancelled."; }
+        catch (Exception ex) { _vm.RefreshHdStatus(); Error("HD generation failed", ex); }
+        finally { _vm.Generating = false; }
     }
 
     private static string Trim(string s) => s.Length > 600 ? s[..600] + "..." : s;

@@ -61,8 +61,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // ---------------------------------------------------------------- choices
     public List<Choice> Renderers { get; } = new()
     {
-        new("auto", "Automatic (recommended)"), new("d3d11", "Direct3D 11"), new("d3d12", "Direct3D 12"),
-        new("d3d10", "Direct3D 10.1"), new("vulkan", "Vulkan"), new("opengl", "OpenGL 3.3"), new("software", "Software (CPU)"),
+        new("auto", "Automatic (recommended)"), new("d3d11", "Direct3D 11"),
+        new("d3d12", "Direct3D 12 (experimental: high CPU use in menus with some AMD drivers)"),
+        new("d3d10", "Direct3D 10.1"), new("vulkan", "Vulkan (experimental: high CPU use in menus with some AMD drivers)"),
+        new("opengl", "OpenGL 3.3"), new("software", "Software (CPU) - no xBR filter, slow at 4K"),
     };
     public List<Choice> Modes { get; } = new() { new("borderless", "Borderless fullscreen"), new("windowed", "Windowed") };
     public List<Choice> ScaleModes { get; } = new()
@@ -177,7 +179,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CrashDumps { get => _crashDumps; set => Set(ref _crashDumps, value); }
     public bool Log { get => _log; set => Set(ref _log, value); }
     public bool LargeAddressAware { get => Prefs.LargeAddressAware; set { Prefs.LargeAddressAware = value; On(); } }
-    public bool SkipIntro { get => Prefs.SkipIntro; set { Prefs.SkipIntro = value; On(); } }
     public bool CheckUpdates { get => Prefs.CheckUpdates; set { Prefs.CheckUpdates = value; On(); } }
 
     // ---------------------------------------------------------------- components
@@ -197,6 +198,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool PlayIntro { get => _playIntro; set => Set(ref _playIntro, value); }
     private string _hdStatus = "";
     public string HdStatus { get => _hdStatus; set => Set(ref _hdStatus, value); }
+    private bool _generating;
+    public bool Generating { get => _generating; set { Set(ref _generating, value); On(nameof(NotGenerating)); } }
+    public bool NotGenerating => !Generating;
+
+    public void RefreshHdStatus()
+    {
+        if (GameDir == null) { HdStatus = ""; return; }
+        int menus = HdAssets.MenuCount(GameDir), vids = HdAssets.HdVideoCount(GameDir), srcVids = HdAssets.IntroSources(GameDir).Count();
+        var s = $"Generated: {menus} HD menu backgrounds, {vids} of {srcVids} HD intro videos.";
+        if (!HdAssets.IndeoInstalled())
+            s += HdAssets.ConvertedIntrosPresent(GameDir) ? " Intro videos converted for Windows without the Indeo codec."
+                                                         : " The Indeo codec is not installed: the intros are converted when you generate assets or press Play.";
+        if ((HdMenus && menus == 0) || (HdVideos && vids < srcVids)) s += " Press Generate to create the missing HD assets.";
+        HdStatus = s;
+    }
 
     public void ApplyProfile(string name)
     {
@@ -279,6 +295,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
         CrashDumps = ini.GetBool("Debug", "CrashDumps", true);
         RefreshInstallState();
+        RefreshHdStatus();
     }
 
     private static string Pick(List<Choice> list, string value, string def) =>

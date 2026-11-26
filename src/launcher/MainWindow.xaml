@@ -52,7 +52,7 @@
               <Button Content="Open game folder" Click="OpenFolder_Click"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Section}" Text="LAUNCH OPTIONS"/>
-            <CheckBox Content="Skip intro videos (they use the obsolete Indeo codec)" IsChecked="{Binding SkipIntro}"/>
+            <CheckBox Content="Play the intro videos" IsChecked="{Binding PlayIntro}"/>
             <CheckBox Content="Use 4 GB memory mode (Large Address Aware copy of the game executable)" IsChecked="{Binding LargeAddressAware}"/>
             <TextBlock Style="{StaticResource Hint}" Text="Creates '&lt;game&gt;.4gb.exe' next to the original and launches that instead. The original executable is never modified. Windows Firewall may ask once for the new file."/>
           </StackPanel>
@@ -87,8 +87,10 @@
             <CheckBox Content="HD menu backgrounds (generated once on this PC with an AI upscaler)" IsChecked="{Binding HdMenus}"/>
             <CheckBox Content="HD intro videos (generated once on this PC with an AI upscaler)" IsChecked="{Binding HdVideos}"/>
             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-              <Button Content="Generate HD assets..." Click="GenerateHd_Click"/>
+              <Button Content="Generate HD assets..." Click="GenerateHd_Click" IsEnabled="{Binding NotGenerating}"/>
+              <Button Content="Cancel" Click="CancelHd_Click" Visibility="{Binding Generating, Converter={StaticResource Vis}}"/>
             </StackPanel>
+            <TextBlock Style="{StaticResource Hint}" Text="Downloads FFmpeg and the Real-ESRGAN upscaler (about 130 MB, kept in your user folder) and upscales the game's own menu art and intro videos with the x4plus model. Needs a GPU with Vulkan; the videos take several minutes."/>
             <TextBlock Style="{StaticResource Hint}" Text="{Binding HdStatus}"/>
           </StackPanel>
         </ScrollViewer>
@@ -107,7 +109,7 @@
               <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Window"/>
               <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding Modes}" SelectedValue="{Binding Mode}"/>
             </Grid>
-            <TextBlock Style="{StaticResource Hint}" Text="Automatic picks Direct3D 11 and falls back to OpenGL, D3D12, Vulkan, D3D10 and finally Software. Alt+Enter switches between windowed and borderless while playing."/>
+            <TextBlock Style="{StaticResource Hint}" Text="Automatic picks Direct3D 11 and falls back to OpenGL, D3D12, Vulkan, D3D10 and finally Software. Alt+Enter switches between windowed and borderless while playing. A renderer change applies the next time the game starts; filter, scaling, window mode, VSync and frame limit apply immediately when you press Save."/>
 
             <TextBlock Style="{StaticResource Section}" Text="RESOLUTION AND UI SCALE"/>
             <Grid>
