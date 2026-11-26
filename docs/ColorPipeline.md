@@ -133,3 +133,11 @@ B is the realistic first step and matches the "optional, original stays default"
   2. Write an *object tag* per covered pixel into the surface's tag plane (reusing the HD-text tag plane), using the SLP frame's own coverage. Later draws overwrite earlier ones, so occlusion is exact.
   3. The presenter replaces tagged pixels with the matching HD frame (true colour, 4x, player colour from a mask channel), sampled at output resolution.
 - Assets: about 100k unit/building frames and 3,562 terrain frames. They would be produced offline (AI upscale + de-dither) and shipped as optional packs, most likely by category (terrain, buildings, units).
+
+### C. Terrain: engine path and assets
+- Map renderer `0x60dbb0` calls the per-tile terrain drawer **`0x60fe60`** (thiscall on the map view, 9 arguments; arguments 5 and 6 are the tile's map x/y) once per visible tile (`0x60e4e2`).
+- `0x60fe60` looks at the neighbouring terrain types (offset table `0x69b794`) for blending. It picks the tile frame through `0x611b20(terrain, 0, x, y)`, draws blends with `0x60a320` / `0x60a4d0` (blendomatic), and dispatches to 12 tile blitters (`0x612b20 ... 0x613b10`) by slope shape and lighting mode.
+- The loader (`0x609ab9-0x609e36`) stores the terrain tables in the view object: FilterMaps (17 slope shapes) at `+0x3f0`, LightMaps at `+0x478`, PatternMasks at `+0x4c0`, blendomatic at `+0x5e4`.
+- **Assets:** every terrain SLP is an n x n grid (n = 10, 6 or 3) of 97x49 tiles cut from **one seamless isometric texture**. Tile (i, j) uses frame j*n + i, and map axis i runs up-right (`tools/terrain_mosaic.py`). The texture can therefore be upscaled as one image (with wrap-around context) instead of tile by tile. Test on dirt (`15001`): 3x3 wrapped mosaic, Real-ESRGAN x4plus, 17 s. The dither noise turns into a natural HD surface:
+
+![Terrain 15001: original (left) vs AI x4 (right)](img/terrain-hd-test.png)
