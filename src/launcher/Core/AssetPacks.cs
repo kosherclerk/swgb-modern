@@ -28,29 +28,78 @@ public static class AssetPacks
         "9c2e2c06fa8aaca6c35da784f6fae92d2db610dc6922b3c673e36e29c117cb43",
         "intro videos without the Indeo codec");
 
-    // SWGBM_ASSETS_BASE overrides the download location (testing a pack before it is published)
+    // Download location. SWGBM_ASSETS_BASE overrides it for testing a pack before it is
+    // published; only https, or http on this machine (localhost), is accepted.
     public static string Url(Pack p) =>
         (Environment.GetEnvironmentVariable("SWGBM_ASSETS_BASE") is { Length: > 0 } b ? b.TrimEnd('/')
             : $"https://github.com/{Repository}/releases/download/{ReleaseTag}") + "/" + p.FileName;
 
-    private static string? Token => Environment.GetEnvironmentVariable("SWGBM_GITHUB_TOKEN") is { Length: > 0 } t ? t : null;
+    // Token handling (private assets repository). The launcher never contains a token:
+    // the user supplies one (ideally a fine-grained, read-only token for this repository
+    // only) in SWGBM_GITHUB_TOKEN. It is
+    //  - sent only over https to api.github.com, for paths of this repository;
+    //  - never sent on redirects (redirects are followed by hand, without it, and only
+    //    to GitHub download hosts);
+    //  - never used together with SWGBM_ASSETS_BASE, never logged or stored.
+    private static string? Token =>
+        Environment.GetEnvironmentVariable("SWGBM_GITHUB_TOKEN") is { Length: > 0 } t && t.Trim() is { Length: > 0 } tt && !tt.Any(char.IsWhiteSpace) ? tt : null;
+    private static bool HasBaseOverride => Environment.GetEnvironmentVariable("SWGBM_ASSETS_BASE") is { Length: > 0 };
 
-    /// <summary>Private repository: resolve the asset through the API with the token.</summary>
-    private static async Task<HttpRequestMessage> Request(HttpClient http, Pack p, CancellationToken ct)
+    private static bool IsApiForRepo(Uri u) =>
+        u.Scheme == Uri.UriSchemeHttps && u.IsDefaultPort && u.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase) &&
+        u.AbsolutePath.StartsWith($"/repos/{Repository}/", StringComparison.Ordinal);
+
+    private static bool IsAllowedDownloadHost(Uri u)
     {
-        if (Token is not { } token || Environment.GetEnvironmentVariable("SWGBM_ASSETS_BASE") is { Length: > 0 })
-            return new HttpRequestMessage(HttpMethod.Get, Url(p));
-        using var rel = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/tags/{ReleaseTag}");
-        rel.Headers.Authorization = new("Bearer", token);
-        using var r = await http.SendAsync(rel, ct);
+        if (u.Scheme == Uri.UriSchemeHttp) return HasBaseOverride && u.IsLoopback;
+        if (u.Scheme != Uri.UriSchemeHttps) return false;
+        var h = u.Host.ToLowerInvariant();
+        return h == "github.com" || h == "api.github.com" || h.EndsWith(".githubusercontent.com") || (HasBaseOverride && u.IsLoopback);
+    }
+
+    private static HttpRequestMessage Get(Uri u, string? token, string? accept = null)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, u);
+        if (token != null && IsApiForRepo(u)) req.Headers.Authorization = new("Bearer", token);
+        if (accept != null) req.Headers.Accept.ParseAdd(accept);
+        return req;
+    }
+
+    /// <summary>GET with manual redirects: the token is only on the first hop to the API.</summary>
+    private static async Task<HttpResponseMessage> Send(HttpClient http, Uri u, string? token, string? accept, HttpCompletionOption mode, CancellationToken ct)
+    {
+        for (int hop = 0; hop < 6; hop++)
+        {
+            if (!IsAllowedDownloadHost(u)) throw new InvalidOperationException($"refusing to download from {u.Host}.");
+            var resp = await http.SendAsync(Get(u, hop == 0 ? token : null, accept), mode, ct);
+            if ((int)resp.StatusCode is >= 300 and < 400 && resp.Headers.Location is { } loc)
+            {
+                u = loc.IsAbsoluteUri ? loc : new Uri(u, loc);
+                resp.Dispose();
+                continue;
+            }
+            return resp;
+        }
+        throw new InvalidOperationException("too many redirects.");
+    }
+
+    private static async Task<HttpResponseMessage> Open(HttpClient http, Pack p, CancellationToken ct)
+    {
+        if (Token is not { } token || HasBaseOverride)
+            return await Send(http, new Uri(Url(p)), null, null, HttpCompletionOption.ResponseHeadersRead, ct);
+        // private repository: look the asset up through the API, then fetch it
+        using var r = await Send(http, new Uri($"https://api.github.com/repos/{Repository}/releases/tags/{ReleaseTag}"), token,
+                                 "application/vnd.github+json", HttpCompletionOption.ResponseContentRead, ct);
+        if (r.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            throw new InvalidOperationException("the GitHub token in SWGBM_GITHUB_TOKEN has no access to the asset packs.");
         r.EnsureSuccessStatusCode();
         using var doc = System.Text.Json.JsonDocument.Parse(await r.Content.ReadAsStringAsync(ct));
         var asset = doc.RootElement.GetProperty("assets").EnumerateArray().First(a => a.GetProperty("name").GetString() == p.FileName);
-        var req = new HttpRequestMessage(HttpMethod.Get, asset.GetProperty("url").GetString());
-        req.Headers.Authorization = new("Bearer", token);
-        req.Headers.Accept.ParseAdd("application/octet-stream");
-        return req;
+        var assetUrl = new Uri(asset.GetProperty("url").GetString()!);
+        if (!IsApiForRepo(assetUrl)) throw new InvalidOperationException("unexpected asset address.");
+        return await Send(http, assetUrl, token, "application/octet-stream", HttpCompletionOption.ResponseHeadersRead, ct);
     }
+
     public static string SizeText(Pack p) => $"{p.Size / 1048576.0:0} MB";
 
     private static string ModDir(string game) => Path.Combine(game, "SWGBModern");
@@ -71,11 +120,10 @@ public static class AssetPacks
         var tmp = Path.Combine(Path.GetTempPath(), $"swgbm-{p.Id}-{Guid.NewGuid():N}.zip");
         try
         {
-            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) })
+            using (var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) })
             {
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("SWGBModern-Launcher");
-                using var req = await Request(http, p, ct);
-                using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var resp = await Open(http, p, ct);
                 if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
                     throw new InvalidOperationException("this download is not publicly available yet.");
                 resp.EnsureSuccessStatusCode();
