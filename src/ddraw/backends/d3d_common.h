@@ -2,6 +2,7 @@
 #pragma once
 #include "../renderer.h"
 #include <dxgi1_6.h>
+#include <d3d11.h>
 #include <d3dcompiler.h>
 
 namespace swgbm {
@@ -139,7 +140,18 @@ struct DxgiSwap {
         UINT pf = (!vsync && tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0;
         HRESULT hr = swap->Present(vsync ? 1 : 0, pf);
         waited = false;
-        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) { LOG("DXGI device lost %08lx", hr); return false; }
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+            // the removal reason tells a driver reset (TDR, GPU busy elsewhere) from a real fault
+            HRESULT why = hr;
+            IUnknown* dev = nullptr;
+            ID3D11Device* d11 = nullptr;
+            if (SUCCEEDED(swap->GetDevice(__uuidof(IUnknown), (void**)&dev)) && dev) {
+                if (SUCCEEDED(dev->QueryInterface(__uuidof(ID3D11Device), (void**)&d11)) && d11) { why = d11->GetDeviceRemovedReason(); d11->Release(); }
+                dev->Release();
+            }
+            LOG("DXGI device lost %08lx (reason %08lx); recreating the renderer", hr, why);
+            return false;
+        }
         return true;
     }
 };
