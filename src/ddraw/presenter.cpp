@@ -3,6 +3,7 @@
 #include "window.h"
 #include "hdmenus.h"
 #include "textlayer.h"
+#include "effects.h"
 #include <algorithm>
 #include <math.h>
 
@@ -324,6 +325,16 @@ void Presenter::Run() {
                 ovDirty = true;
                 frame.MarkAll(); // restore the original glyph pixels on the GPU
             }
+        }
+        // graphics enhancements (smooth fog): stipple removed, shade plane filled
+        if (have && use != &ovRender_ && Effects::Compose(*show, fxDisp_, forceFull || !fxActive_ || show != fxSrc_)) {
+            fxActive_ = true;
+            fxSrc_ = show;
+            show = &fxDisp_;
+        } else if (fxActive_) {
+            fxActive_ = false;
+            frame.MarkAll();
+            if (textActive_) textDisp_.MarkAll();
         }
         if (use == &ovRender_ && lastOverlay_ != &ovRender_) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
         lastOverlay_ = use;

@@ -47,6 +47,9 @@ private:
     Overlay hdOverlay_;       // HD menu background composite
     bool hdActive_ = false;
     Overlay textOverlay_;     // HD text canvas (on top of the HD menu when active)
+    Frame fxDisp_;            // displayed frame after graphics enhancements (smooth fog)
+    bool fxActive_ = false;
+    const Frame* fxSrc_ = nullptr;
     Frame textDisp_;          // displayed frame with the low-res glyphs removed
     bool textActive_ = false;
     const Overlay* lastOverlay_ = nullptr;

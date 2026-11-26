@@ -54,7 +54,7 @@ public:
         hd.NumDescriptors = kBackBuffers + 1;
         if (FAILED(dev_->CreateDescriptorHeap(&hd, IID_ID3D12DescriptorHeap, (void**)&rtvHeap_))) return false;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 4;
+        hd.NumDescriptors = 5;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(dev_->CreateDescriptorHeap(&hd, IID_ID3D12DescriptorHeap, (void**)&srvHeap_))) return false;
         rtvInc_ = dev_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -94,6 +94,11 @@ public:
         uint8_t* up = uploadPtr_[cur_];
         for (int y = y0; y < y1; y++) memcpy(up + idxFoot_.Offset + (size_t)y * idxFoot_.Footprint.RowPitch, f.pixels.data() + (size_t)y * f.width, f.width);
         if (pal) memcpy(up + palFoot_.Offset, f.palette, 1024);
+        int sy0 = 0, sy1 = 0;
+        const uint8_t* sd = nullptr;
+        bool shadeUp = ShadeUpload(f, !shadeValid_, sy0, sy1, sd);
+        if (shadeUp)
+            for (int y = sy0; y < sy1; y++) memcpy(up + shadeFoot_.Offset + (size_t)y * shadeFoot_.Footprint.RowPitch, sd + (size_t)y * f.width, f.width);
 
         alloc_[cur_]->Reset();
         list_->Reset(alloc_[cur_], nullptr);
@@ -117,6 +122,16 @@ public:
             list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
             b = Transition(palTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             list_->ResourceBarrier(1, &b);
+        }
+        if (shadeUp) {
+            D3D12_RESOURCE_BARRIER b = Transition(shadeTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            list_->ResourceBarrier(1, &b);
+            dst.pResource = shadeTex_; src.PlacedFootprint = shadeFoot_;
+            D3D12_BOX box = {0, (UINT)sy0, 0, (UINT)f.width, (UINT)sy1, 1};
+            list_->CopyTextureRegion(&dst, 0, (UINT)sy0, 0, &src, &box);
+            b = Transition(shadeTex_, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list_->ResourceBarrier(1, &b);
+            shadeValid_ = true;
         }
         allDirty_ = false;
         D3D12_RESOURCE_BARRIER b2 = Transition(frameTex_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -264,15 +279,18 @@ private:
         return r;
     }
     void ReleaseFrame() {
-        SafeRelease(idxTex_); SafeRelease(frameTex_);
+        SafeRelease(idxTex_); SafeRelease(frameTex_); SafeRelease(shadeTex_);
+        shadeValid_ = false;
         for (int i = 0; i < kInFlight; i++) { if (upload_[i]) upload_[i]->Unmap(0, nullptr); SafeRelease(upload_[i]); uploadPtr_[i] = nullptr; }
     }
     bool CreateFrame(int w, int h) {
         ReleaseFrame();
         idxTex_ = CreateTex(w, h, DXGI_FORMAT_R8_UINT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         frameTex_ = CreateTex(w, h, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!idxTex_ || !frameTex_) return false;
+        shadeTex_ = CreateTex(w, h, DXGI_FORMAT_R8_UINT, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (!idxTex_ || !frameTex_ || !shadeTex_) return false;
         WriteSrv(0, idxTex_, DXGI_FORMAT_R8_UINT);
+        WriteSrv(4, shadeTex_, DXGI_FORMAT_R8_UINT);
         WriteSrv(2, frameTex_, DXGI_FORMAT_R8G8B8A8_UNORM);
         dev_->CreateRenderTargetView(frameTex_, nullptr, Rtv(kBackBuffers));
         // upload buffer: index footprint followed by palette footprint
@@ -281,11 +299,13 @@ private:
         dev_->GetCopyableFootprints(&idesc, 0, 1, 0, &idxFoot_, nullptr, nullptr, &isz);
         UINT64 palOff = (isz + 511) & ~511ull;
         dev_->GetCopyableFootprints(&pdesc, 0, 1, palOff, &palFoot_, nullptr, nullptr, &psz);
+        UINT64 shadeOff = (palOff + psz + 511) & ~511ull, ssz = 0;
+        dev_->GetCopyableFootprints(&idesc, 0, 1, shadeOff, &shadeFoot_, nullptr, nullptr, &ssz);
         D3D12_HEAP_PROPERTIES hp = {};
         hp.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC bd = {};
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bd.Width = palOff + psz; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
+        bd.Width = shadeOff + ssz; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
         bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         for (int i = 0; i < kInFlight; i++) {
             if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
@@ -309,7 +329,7 @@ private:
     bool CreatePipeline() {
         D3D12_DESCRIPTOR_RANGE range = {};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 4;
+        range.NumDescriptors = 5;
         D3D12_ROOT_PARAMETER params[2] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable.NumDescriptorRanges = 1;
@@ -397,7 +417,9 @@ private:
     ID3D12Resource* frameTex_ = nullptr;
     ID3D12Resource* upload_[kInFlight] = {};
     uint8_t* uploadPtr_[kInFlight] = {};
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT idxFoot_ = {}, palFoot_ = {};
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT idxFoot_ = {}, palFoot_ = {}, shadeFoot_ = {};
+    ID3D12Resource* shadeTex_ = nullptr;
+    bool shadeValid_ = false;
     int fw_ = 0, fh_ = 0;
 };
 

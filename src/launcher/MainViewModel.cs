@@ -191,7 +191,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
     public bool EnhSmooth { get => GameFps > 20; set { GameFps = value ? 60 : 20; MinimapMs = value ? 100 : 333; On(); } }
     public bool EnhFilter { get => Filter != "nearest"; set { Filter = value ? "xbr" : "nearest"; On(); } }
-    private bool _hdText, _hdMenus, _hdVideos, _playIntro = true;
+    private bool _hdText, _hdMenus, _hdVideos, _playIntro = true, _smoothFog;
+    public bool SmoothFog { get => _smoothFog; set => Set(ref _smoothFog, value); }
     public bool HdText { get => _hdText; set => Set(ref _hdText, value); }
     public bool HdMenus { get => _hdMenus; set => Set(ref _hdMenus, value); }
     public bool HdVideos { get => _hdVideos; set => Set(ref _hdVideos, value); }
@@ -223,6 +224,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HdText = enhanced;
         HdMenus = enhanced;
         HdVideos = enhanced;
+        SmoothFog = enhanced;
         PanelStyle = "stretch";
         Prefs.Profile = name;
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
@@ -291,6 +293,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HdText = ini.GetBool("Enhancements", "HDText", false);
         HdMenus = ini.GetBool("Enhancements", "HDMenus", false);
         HdVideos = ini.GetBool("Enhancements", "HDVideos", false);
+        SmoothFog = ini.GetBool("Enhancements", "SmoothFog", false);
         PlayIntro = ini.GetBool("Video", "PlayIntro", true);
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
         CrashDumps = ini.GetBool("Debug", "CrashDumps", true);
@@ -353,6 +356,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Enhancements", "HDText", HdText);
         ini.Set("Enhancements", "HDMenus", HdMenus);
         ini.Set("Enhancements", "HDVideos", HdVideos);
+        ini.Set("Enhancements", "SmoothFog", SmoothFog);
         ini.Set("Video", "PlayIntro", PlayIntro);
         ini.Set("Debug", "CrashDumps", CrashDumps);
         ini.Save();

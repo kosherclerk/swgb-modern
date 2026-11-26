@@ -80,6 +80,7 @@ public:
         glUseProgram(progPal_);
         glUniform1i(glGetUniformLocation(progPal_, "IndexTex"), 0);
         glUniform1i(glGetUniformLocation(progPal_, "PaletteTex"), 1);
+        glUniform1i(glGetUniformLocation(progPal_, "ShadeTex"), 2);
         glUseProgram(progScale_);
         glUniform1i(glGetUniformLocation(progScale_, "FrameTex"), 0);
         uSrc_ = glGetUniformLocation(progScale_, "srcSize");
@@ -102,6 +103,15 @@ public:
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, palTex_);
         if (f.paletteChanged) glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_BGRA, GL_UNSIGNED_BYTE, f.palette);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, shadeTex_);
+        {
+            int sy0, sy1;
+            const uint8_t* sd;
+            if (ShadeUpload(f, shadeNew_, sy0, sy1, sd))
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, sy0, f.width, sy1 - sy0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, sd + (size_t)sy0 * f.width);
+            shadeNew_ = false;
+        }
         glBindVertexArray(vao_);
         glDisable(GL_BLEND);
         glDisable(GL_DEPTH_TEST);
@@ -165,11 +175,16 @@ private:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
     void CreateFrameResources(int w, int h) {
-        if (idxTex_) { glDeleteTextures(1, &idxTex_); glDeleteTextures(1, &frameTex_); }
+        if (idxTex_) { glDeleteTextures(1, &idxTex_); glDeleteTextures(1, &frameTex_); glDeleteTextures(1, &shadeTex_); }
         glGenTextures(1, &idxTex_);
         glBindTexture(GL_TEXTURE_2D, idxTex_);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
         SetParams(GL_NEAREST);
+        glGenTextures(1, &shadeTex_);
+        glBindTexture(GL_TEXTURE_2D, shadeTex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+        SetParams(GL_NEAREST);
+        shadeNew_ = true;
         glGenTextures(1, &frameTex_);
         glBindTexture(GL_TEXTURE_2D, frameTex_);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -213,7 +228,8 @@ private:
     int lastVsync_ = -1;
     GLuint progOverlay_ = 0, ovTex_ = 0;
     int ovW_ = 0, ovH_ = 0;
-    GLuint progPal_ = 0, progScale_ = 0, vao_ = 0, fbo_ = 0, idxTex_ = 0, palTex_ = 0, frameTex_ = 0;
+    GLuint progPal_ = 0, progScale_ = 0, vao_ = 0, fbo_ = 0, idxTex_ = 0, palTex_ = 0, frameTex_ = 0, shadeTex_ = 0;
+    bool shadeNew_ = true;
     GLint uPalH_ = -1, uSrc_ = -1, uDst_ = -1, uFilter_ = -1, uSharp_ = -1;
     int fw_ = 0, fh_ = 0;
 };

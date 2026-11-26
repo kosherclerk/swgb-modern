@@ -65,8 +65,9 @@ public:
         if (mode == Filter::Nearest) { tw = vp.w; th = vp.h; }
         else if (mode == Filter::Sharp) { tw = f.width * k; th = f.height * k; }
         else { tw = f.width; th = f.height; }
-        bool full = buf_.Ensure(tw, th) || f.paletteChanged || mode != lastMode_ || f.width != lastFw_ || f.height != lastFh_;
-        lastMode_ = mode; lastFw_ = f.width; lastFh_ = f.height;
+        const bool shade = f.shade.size() == f.pixels.size() && !f.shade.empty();
+        bool full = buf_.Ensure(tw, th) || f.paletteChanged || mode != lastMode_ || f.width != lastFw_ || f.height != lastFh_ || shade != lastShade_;
+        lastMode_ = mode; lastFw_ = f.width; lastFh_ = f.height; lastShade_ = shade;
         if (!buf_.bits) return false;
 
         // map destination rows/cols to source rows/cols (nearest, exact)
@@ -90,7 +91,16 @@ public:
                     uint32_t* d = dst + (size_t)y * tw;
                     if (y > d0 + a && ymap_[y] == ymap_[y - 1]) { memcpy(d, d - tw, (size_t)tw * 4); continue; }
                     const uint8_t* s = px + (size_t)ymap_[y] * fw;
-                    for (int x = 0; x < tw; x++) d[x] = pal[s[xmap_[x]]];
+                    if (!shade) { for (int x = 0; x < tw; x++) d[x] = pal[s[xmap_[x]]]; continue; }
+                    const uint8_t* k = f.shade.data() + (size_t)ymap_[y] * fw;
+                    for (int x = 0; x < tw; x++) {
+                        int sx = xmap_[x];
+                        uint32_t c = pal[s[sx]], m = k[sx];
+                        if (m == 128) { d[x] = c; continue; }
+                        uint32_t r = std::min<uint32_t>(255, ((c >> 16) & 0xFF) * m >> 7), g = std::min<uint32_t>(255, ((c >> 8) & 0xFF) * m >> 7),
+                                 b = std::min<uint32_t>(255, (c & 0xFF) * m >> 7);
+                        d[x] = (r << 16) | (g << 8) | b;
+                    }
                 }
             });
         }
@@ -142,6 +152,7 @@ private:
     std::vector<int> xmap_, ymap_;
     Filter lastMode_ = Filter::Nearest;
     int lastFw_ = 0, lastFh_ = 0;
+    bool lastShade_ = false;
 };
 
 } // namespace

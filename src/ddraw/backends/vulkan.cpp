@@ -191,6 +191,10 @@ public:
         uint8_t* p = stagingPtr_[cur_];
         if (y1 > y0) memcpy(p + (size_t)y0 * f.width, f.pixels.data() + (size_t)y0 * f.width, (size_t)(y1 - y0) * f.width);
         if (pal) memcpy(p + palOffset_, f.palette, 1024);
+        int sy0 = 0, sy1 = 0;
+        const uint8_t* sd = nullptr;
+        bool shadeUp = ShadeUpload(f, !shadeValid_, sy0, sy1, sd);
+        if (shadeUp) memcpy(p + shadeOffset_ + (size_t)sy0 * f.width, sd + (size_t)sy0 * f.width, (size_t)(sy1 - sy0) * f.width);
 
         vkResetCommandBuffer(cmd_, 0);
         VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -213,6 +217,7 @@ public:
         };
         if (y1 > y0) upload(idx_, idxValid_, (VkDeviceSize)y0 * f.width, y0, y1, f.width);
         if (pal) upload(pal_, palValid_, palOffset_, 0, 1, 256);
+        if (shadeUp) upload(shade_, shadeValid_, shadeOffset_ + (VkDeviceSize)sy0 * f.width, sy0, sy1, f.width);
         allDirty_ = false;
         bool drawOverlay = UploadOverlay();
 
@@ -461,11 +466,12 @@ private:
         sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
         vkCreateSampler(dev_, &sci, nullptr, &sampLinear_);
 
-        VkDescriptorSetLayoutBinding b[2] = {};
+        VkDescriptorSetLayoutBinding b[3] = {};
         b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         b[1] = b[0]; b[1].binding = 1;
+        b[2] = b[0]; b[2].binding = 2;
         VkDescriptorSetLayoutCreateInfo dl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        dl.bindingCount = 2; dl.pBindings = b;
+        dl.bindingCount = 3; dl.pBindings = b;
         vkCreateDescriptorSetLayout(dev_, &dl, nullptr, &dslPal_);
         dl.bindingCount = 1;
         vkCreateDescriptorSetLayout(dev_, &dl, nullptr, &dslScale_);
@@ -476,7 +482,7 @@ private:
         pl.pSetLayouts = &dslScale_;
         pl.pushConstantRangeCount = 1; pl.pPushConstantRanges = &pcr;
         vkCreatePipelineLayout(dev_, &pl, nullptr, &layoutScale_);
-        VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
+        VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
         VkDescriptorPoolCreateInfo dp = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         dp.maxSets = 3; dp.poolSizeCount = 1; dp.pPoolSizes = &ps;
         vkCreateDescriptorPool(dev_, &dp, nullptr, &pool_);
@@ -504,25 +510,29 @@ private:
     void DestroyFrame() {
         if (frameFb_) { vkDestroyFramebuffer(dev_, frameFb_, nullptr); frameFb_ = VK_NULL_HANDLE; }
         DestroyImg(idx_);
+        DestroyImg(shade_);
         DestroyImg(frame_);
         for (int i = 0; i < kInFlight; i++) {
             if (stagingBuf_[i]) { vkUnmapMemory(dev_, stagingMem_[i]); vkDestroyBuffer(dev_, stagingBuf_[i], nullptr); vkFreeMemory(dev_, stagingMem_[i], nullptr); }
             stagingBuf_[i] = VK_NULL_HANDLE; stagingPtr_[i] = nullptr;
         }
         idxValid_ = false;
+        shadeValid_ = false;
     }
     bool CreateFrame(int w, int h) {
         DestroyFrame();
         if (!CreateImg(idx_, w, h, VK_FORMAT_R8_UINT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return false;
+        if (!CreateImg(shade_, w, h, VK_FORMAT_R8_UINT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return false;
         if (!CreateImg(frame_, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) return false;
         VkFramebufferCreateInfo fi = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         fi.renderPass = rpPal_; fi.attachmentCount = 1; fi.pAttachments = &frame_.view;
         fi.width = w; fi.height = h; fi.layers = 1;
         if (vkCreateFramebuffer(dev_, &fi, nullptr, &frameFb_) != VK_SUCCESS) return false;
         palOffset_ = ((VkDeviceSize)w * h + 255) & ~(VkDeviceSize)255;
+        shadeOffset_ = palOffset_ + 1024;
         for (int i = 0; i < kInFlight; i++) {
             VkBufferCreateInfo bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            bci.size = palOffset_ + 1024;
+            bci.size = shadeOffset_ + (VkDeviceSize)w * h;
             bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
             vkCreateBuffer(dev_, &bci, nullptr, &stagingBuf_[i]);
             VkMemoryRequirements mr;
@@ -535,11 +545,12 @@ private:
             vkMapMemory(dev_, stagingMem_[i], 0, VK_WHOLE_SIZE, 0, (void**)&stagingPtr_[i]);
         }
         allDirty_ = true;
-        VkDescriptorImageInfo ii[2] = {{sampNearest_, idx_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                      {sampNearest_, pal_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+        VkDescriptorImageInfo ii[3] = {{sampNearest_, idx_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                      {sampNearest_, pal_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                      {sampNearest_, shade_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
         VkDescriptorImageInfo fi2 = {sampLinear_, frame_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
-        wr[0].dstSet = setPal_; wr[0].descriptorCount = 2; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = ii;
+        wr[0].dstSet = setPal_; wr[0].descriptorCount = 3; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = ii;
         wr[1].dstSet = setScale_; wr[1].descriptorCount = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &fi2;
         vkUpdateDescriptorSets(dev_, 2, wr, 0, nullptr);
         fw_ = w; fh_ = h;
@@ -643,7 +654,7 @@ private:
     VkRenderPass rpPal_ = VK_NULL_HANDLE, rpScale_ = VK_NULL_HANDLE;
     VkPipeline pipePal_ = VK_NULL_HANDLE, pipeScale_ = VK_NULL_HANDLE;
     VkShaderModule vsModule_ = VK_NULL_HANDLE, fsScaleModule_ = VK_NULL_HANDLE;
-    Img idx_, pal_, frame_, ov_;
+    Img idx_, pal_, frame_, ov_, shade_;
     VkPipeline pipeOverlay_ = VK_NULL_HANDLE;
     VkShaderModule fsOverlayModule_ = VK_NULL_HANDLE;
     VkDescriptorSet ovSet_ = VK_NULL_HANDLE;
@@ -656,7 +667,8 @@ private:
     VkBuffer stagingBuf_[kInFlight] = {};
     VkDeviceMemory stagingMem_[kInFlight] = {};
     uint8_t* stagingPtr_[kInFlight] = {};
-    VkDeviceSize palOffset_ = 0;
+    VkDeviceSize palOffset_ = 0, shadeOffset_ = 0;
+    bool shadeValid_ = false;
     int fw_ = 0, fh_ = 0;
     bool vsync_ = true;
 };

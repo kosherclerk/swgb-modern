@@ -84,6 +84,7 @@
             <CheckBox Content="Smooth rendering: battlefield redrawn up to 60 times per second (original 20). Game speed unchanged." IsChecked="{Binding EnhSmooth}"/>
             <CheckBox Content="Upscaling filter instead of plain pixels (choose the filter on the Display tab)" IsChecked="{Binding EnhFilter}"/>
             <CheckBox Content="HD text: interface text drawn sharply at screen resolution" IsChecked="{Binding HdText}"/>
+            <CheckBox Content="Smooth fog of war: even darkening instead of the black checkerboard pattern" IsChecked="{Binding SmoothFog}"/>
             <CheckBox Content="HD menu backgrounds (AI-upscaled from the original art)" IsChecked="{Binding HdMenus}"/>
             <CheckBox Content="HD intro videos (AI-upscaled from the original videos)" IsChecked="{Binding HdVideos}"/>
             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
