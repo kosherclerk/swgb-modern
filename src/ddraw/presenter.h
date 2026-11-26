@@ -44,12 +44,6 @@ private:
     Overlay ovShared_;        // written by producers under ovLock_
     bool ovChanged_ = false;
     Overlay ovRender_;        // presenter-thread copy handed to the backend
-    Overlay textOverlay_;     // HD text canvas (on top of the HD menu when active)
-    Frame fxDisp_;            // displayed frame after graphics enhancements (smooth fog)
-    bool fxActive_ = false;
-    const Frame* fxSrc_ = nullptr;
-    Frame textDisp_;          // displayed frame with the low-res glyphs removed
-    bool textActive_ = false;
     const Overlay* lastOverlay_ = nullptr;
     Viewport vp_ = {0, 0, 800, 600};
     int gameW_ = 800, gameH_ = 600;

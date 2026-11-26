@@ -1,8 +1,6 @@
 #include "presenter.h"
 #include "ddraw_impl.h"
 #include "window.h"
-#include "textlayer.h"
-#include "effects.h"
 #include <algorithm>
 #include <math.h>
 
@@ -22,8 +20,8 @@ Presenter& Presenter::Get() {
 static Filter ParseFilter(const std::string& s) {
     if (s == "sharp" || s == "sharpbilinear") return Filter::Sharp;
     if (s == "bilinear" || s == "linear") return Filter::Bilinear;
-    if (s == "xbr") return Filter::XBR;
-    if (s == "smooth" || s == "smooth4x") return Filter::Smooth4x;
+    if (s == "xbr") return Filter::Sharp;   // xBR was removed in 1.3.1
+    if (s == "smooth" || s == "smooth4x") return Filter::Bilinear;
     return Filter::Nearest;
 }
 
@@ -162,7 +160,6 @@ static void DumpFrameBMP(const Frame& f) {
 void Presenter::LoadOptions(PresentOptions& opt, int& maxFps) {
     opt.filter = ParseFilter(CfgStr("Display", "Filter", "nearest"));
     opt.vsync = CfgBool("Display", "VSync", true);
-    opt.sharpness = CfgFloat("Display", "Sharpness", 0.5f);
     scaleMode_ = (LONG)ParseScale(CfgStr("Display", "ScaleMode", "aspect"));
     rendererName_ = CfgStr("Display", "Renderer", "auto");
     maxFps = CfgInt("Display", "MaxFPS", 0);
@@ -289,38 +286,7 @@ void Presenter::Run() {
         LeaveCriticalSection(&ovLock_);
         if (forceFull && ovRender_.visible) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
         const Overlay* use = ovRender_.visible ? &ovRender_ : nullptr;
-        // HD text on its own canvas at viewport resolution
         Frame* show = &frame;
-        if (use != &ovRender_ && have && TextLayer::Enabled() && !frame.text.empty()) {
-            Viewport tvp = ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
-            const Overlay* base = nullptr;
-            int cw = base ? base->width : std::max(1, tvp.w), chh = base ? base->height : std::max(1, tvp.h);
-            float rx = base ? base->x : 0, ry = base ? base->y : 0, rw = base ? base->w : (float)frame.width, rh = base ? base->h : (float)frame.height;
-            bool wasText = textActive_;
-            QueryPerformanceCounter(&tC);
-            textActive_ = TextLayer::Compose(frame, textDisp_, base, cw, chh, rx, ry, rw, rh, textOverlay_);
-            QueryPerformanceCounter(&tD); tText += tD.QuadPart - tC.QuadPart;
-            if (textActive_) {
-                if (!wasText || forceFull || lastOverlay_ != &textOverlay_) { textOverlay_.dirtyY0 = 0; textOverlay_.dirtyY1 = textOverlay_.height; }
-                if (forceFull) textDisp_.MarkAll();
-                ovDirty = ovDirty || textOverlay_.dirtyY1 > textOverlay_.dirtyY0;
-                use = &textOverlay_;
-                show = &textDisp_;
-            } else if (wasText) {
-                ovDirty = true;
-                frame.MarkAll(); // restore the original glyph pixels on the GPU
-            }
-        }
-        // graphics enhancements (smooth fog): stipple removed, shade plane filled
-        if (have && use != &ovRender_ && Effects::Compose(*show, fxDisp_, forceFull || !fxActive_ || show != fxSrc_)) {
-            fxActive_ = true;
-            fxSrc_ = show;
-            show = &fxDisp_;
-        } else if (fxActive_) {
-            fxActive_ = false;
-            frame.MarkAll();
-            if (textActive_) textDisp_.MarkAll();
-        }
         if (use == &ovRender_ && lastOverlay_ != &ovRender_) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
         lastOverlay_ = use;
         r->SetOverlay(use);

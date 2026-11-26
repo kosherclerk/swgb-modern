@@ -67,13 +67,13 @@ struct ExeLayout {
     uintptr_t gameMalloc;                  // engine CRT malloc()
     uintptr_t viewInterval, mapInterval;   // game screen redraw throttles
     uintptr_t worldStep;                   // world update: "cmp eax,32h" (minimum ms between updates)
-    uintptr_t setPattern4, setPattern8, patternRegs; // blitter stipple pattern (fog)
+    uintptr_t blitter, blitState;          // masked sprite blitter (THIS_COD) and its state (THIS_DAT)
     uint32_t layoutTableId;                // "Resolution Specific Rects" table
     std::vector<ImmSite> sites;            // 1280x1024 mode identification
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651780, 0x6517c0, 0x7a4060, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -87,7 +87,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64e780, 0x64e7c0, 0x7a2060, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -127,7 +127,7 @@ void ApplyFrameRate(const ExeLayout& L) {
 void ApplyEngine(const ExeLayout& L) {
     LOG("engine patches for %s", L.name);
     ApplyFrameRate(L);
-    Effects::InstallEngineHooks(L.setPattern4, L.setPattern8, L.patternRegs);
+    Effects::InstallEngineHooks(L.blitter, L.blitState);
     int W = CfgInt("Display", "GameWidth", 0), H = CfgInt("Display", "GameHeight", 0);
     bool widescreen = CfgBool("Fixes", "Widescreen", true) && W >= 800 && H >= 600 && !(W == 1280 && H == 1024);
     static const uint8_t resPrologue[] = {0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x0C};

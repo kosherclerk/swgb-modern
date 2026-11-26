@@ -83,8 +83,8 @@
             <TextBlock Style="{StaticResource Hint}" Margin="22,0,0,6" Text="Multiplayer note: a wider screen shows more of the battlefield than players on original resolutions see."/>
             <CheckBox Content="Smooth rendering: battlefield redrawn up to 60 times per second (original 20). Game speed unchanged." IsChecked="{Binding EnhSmooth}"/>
             <CheckBox Content="Upscaling filter instead of plain pixels (choose the filter on the Display tab)" IsChecked="{Binding EnhFilter}"/>
-            <CheckBox Content="HD text: interface text drawn sharply at screen resolution" IsChecked="{Binding HdText}"/>
-            <CheckBox Content="Smooth fog of war: even darkening instead of the black checkerboard pattern" IsChecked="{Binding SmoothFog}"/>
+            <CheckBox Content="Smooth text: anti-aliased interface fonts, like Expanding Fronts" IsChecked="{Binding HdText}"/>
+            <CheckBox Content="Smooth fog of war: full detail, evenly darkened instead of the black checkerboard" IsChecked="{Binding SmoothFog}"/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -141,10 +141,8 @@
               <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ScaleModes}" SelectedValue="{Binding ScaleMode}"/>
               <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Upscaling filter"/>
               <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding Filters}" SelectedValue="{Binding Filter}" MinWidth="320"/>
-              <TextBlock Grid.Row="2" Style="{StaticResource Label}" Text="xBR sharpness" Visibility="{Binding ShowSharpness, Converter={StaticResource Vis}}"/>
-              <Slider Grid.Row="2" Grid.Column="1" HorizontalAlignment="Left" Minimum="0" Maximum="1" TickFrequency="0.05" Value="{Binding Sharpness}" Visibility="{Binding ShowSharpness, Converter={StaticResource Vis}}"/>
             </Grid>
-            <TextBlock Style="{StaticResource Hint}" Text="Nearest is lossless and exact at integer scales. xBR smooths pixel-art edges without blurring. The game's sprites are drawn at fixed pixel sizes by the engine, so all upscaling is applied to the finished image."/>
+            <TextBlock Style="{StaticResource Hint}" Text="Nearest is lossless and exact at integer scales. Sharp keeps pixels crisp and only blends the edges where the scale is not a whole number. Bilinear is soft. The game's sprites are drawn at fixed pixel sizes by the engine, so all upscaling is applied to the finished image."/>
 
             <TextBlock Style="{StaticResource Section}" Text="TIMING"/>
             <CheckBox Content="VSync (no tearing; also caps to the monitor refresh rate)" IsChecked="{Binding VSync}"/>

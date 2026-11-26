@@ -64,7 +64,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         new("auto", "Automatic (recommended)"), new("d3d11", "Direct3D 11"),
         new("d3d12", "Direct3D 12 (experimental: high CPU use in menus with some AMD drivers)"),
         new("d3d10", "Direct3D 10.1"), new("vulkan", "Vulkan (experimental: high CPU use in menus with some AMD drivers)"),
-        new("opengl", "OpenGL 3.3"), new("software", "Software (CPU) - no xBR filter, slow at 4K"),
+        new("opengl", "OpenGL 3.3"), new("software", "Software (CPU) - slow at 4K"),
     };
     public List<Choice> Modes { get; } = new() { new("borderless", "Borderless fullscreen"), new("windowed", "Windowed") };
     public List<Choice> ScaleModes { get; } = new()
@@ -73,8 +73,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     };
     public List<Choice> Filters { get; } = new()
     {
-        new("nearest", "Nearest (lossless pixels)"), new("sharp", "Sharp bilinear"), new("xbr", "xBR (smooth pixel-art upscaler)"),
-        new("bilinear", "Bilinear (soft)"),
+        new("nearest", "Nearest (lossless pixels)"), new("sharp", "Sharp bilinear"), new("bilinear", "Bilinear (soft)"),
     };
     public List<Choice> ResolutionModes { get; } = new()
     {
@@ -106,10 +105,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string Renderer { get => _renderer; set => Set(ref _renderer, value); }
     public string Mode { get => _mode; set => Set(ref _mode, value); }
     public string ScaleMode { get => _scaleMode; set => Set(ref _scaleMode, value); }
-    public string Filter { get => _filter; set { Set(ref _filter, value); On(nameof(ShowSharpness)); } }
-    public bool ShowSharpness => Filter == "xbr";
-    private double _sharpness = 0.5;
-    public double Sharpness { get => _sharpness; set => Set(ref _sharpness, value); }
+    public string Filter { get => _filter; set => Set(ref _filter, value); }
     private bool _vsync = true, _lockCursor = true;
     public bool VSync { get => _vsync; set => Set(ref _vsync, value); }
     public bool LockCursor { get => _lockCursor; set => Set(ref _lockCursor, value); }
@@ -163,7 +159,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var (mw, mh, hz) = SystemInfo.PrimaryMonitor();
             if (ResolutionMode == "classic") return $"Menus and game use the original 800x600 / 1024x768 / 1280x1024 modes, scaled to your {mw}x{mh} screen.";
             var (w, h) = EffectiveResolution();
-            string scale = mw % w == 0 && mh % h == 0 && mw / w == mh / h ? $"exact {mw / w}x pixel scaling" : "non-integer scaling (use Sharp or xBR filter)";
+            string scale = mw % w == 0 && mh % h == 0 && mw / w == mh / h ? $"exact {mw / w}x pixel scaling" : "non-integer scaling (use the Sharp filter)";
             return $"In-game {w}x{h}, shown on your {mw}x{mh} @ {hz} Hz desktop with {scale}. The interface is drawn at a fixed pixel size, " +
                    "so a lower in-game resolution means a larger interface. Menus are 800x600 (scaled).";
         }
@@ -190,7 +186,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { ResolutionMode = value ? (ResolutionMode == "classic" ? "auto" : ResolutionMode) : "classic"; On(); }
     }
     public bool EnhSmooth { get => GameFps > 20; set { GameFps = value ? 60 : 20; MinimapMs = value ? 100 : 333; On(); } }
-    public bool EnhFilter { get => Filter != "nearest"; set { Filter = value ? "xbr" : "nearest"; On(); } }
+    public bool EnhFilter { get => Filter != "nearest"; set { Filter = value ? "sharp" : "nearest"; On(); } }
     private bool _hdText, _playIntro = true, _smoothFog;
     public bool SmoothFog { get => _smoothFog; set => Set(ref _smoothFog, value); }
     public bool HdText { get => _hdText; set => Set(ref _hdText, value); }
@@ -204,9 +200,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         bool enhanced = name == "enhanced";
         EnhWidescreen = enhanced;
         EnhSmooth = enhanced;
-        Filter = enhanced ? "xbr" : "nearest";
-        HdText = enhanced;
-        SmoothFog = enhanced;
+        Filter = enhanced ? "sharp" : "nearest";
+        HdText = false;     // optional extras, not part of a profile
+        SmoothFog = false;
         PanelStyle = "stretch";
         Prefs.Profile = name;
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
@@ -214,7 +210,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ProfileText => Prefs.Profile switch
     {
         "faithful" => "Faithful: original look, only compatibility fixes",
-        "enhanced" => "Enhanced: widescreen, smooth rendering, HD text, smooth fog",
+        "enhanced" => "Enhanced: widescreen, smooth rendering, Sharp filter",
         _ => "Custom",
     };
 
@@ -255,7 +251,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Mode = Pick(Modes, ini.GetString("Display", "Mode", "borderless"), "borderless");
         ScaleMode = Pick(ScaleModes, ini.GetString("Display", "ScaleMode", "aspect"), "aspect");
         Filter = Pick(Filters, ini.GetString("Display", "Filter", "nearest"), "nearest");
-        Sharpness = ini.GetDouble("Display", "Sharpness", 0.5);
         VSync = ini.GetBool("Display", "VSync", true);
         MaxFps = ini.GetInt("Display", "MaxFPS", 0);
         LockCursor = ini.GetBool("Display", "LockCursor", true);
@@ -312,7 +307,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Display", "Mode", Mode);
         ini.Set("Display", "ScaleMode", ScaleMode);
         ini.Set("Display", "Filter", Filter);
-        ini.Set("Display", "Sharpness", Sharpness);
         ini.Set("Display", "VSync", VSync);
         ini.Set("Display", "MaxFPS", MaxFps);
         ini.Set("Display", "LockCursor", LockCursor);

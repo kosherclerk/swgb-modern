@@ -10,7 +10,7 @@
 
 namespace swgbm {
 
-enum class Filter { Nearest = 0, Sharp = 1, Bilinear = 2, XBR = 3, Smooth4x = 4 };
+enum class Filter { Nearest = 0, Sharp = 1, Bilinear = 2 };
 enum class ScaleMode { Aspect = 0, Integer = 1, Stretch = 2 };
 
 struct Viewport { int x, y, w, h; };
@@ -24,7 +24,6 @@ struct Frame {
     // when the palette differs. Both are "everything" after a size change.
     int dirtyY0 = 0, dirtyY1 = 0;
     bool paletteChanged = true;
-    std::vector<uint32_t> text;         // HD-text tags of the front buffer (empty = none)
     // Optional per-pixel colour multiplier applied after the palette lookup
     // (graphics enhancements: smooth fog, shadows, lighting). value/128, so 128
     // is exactly 1.0. Empty = none (the image stays bit-exact). Uploaded for the
@@ -37,7 +36,7 @@ struct Frame {
 struct PresentOptions {
     Filter filter = Filter::Nearest;
     bool vsync = true;
-    float sharpness = 0.5f;             // used by xBR / sharp filters
+    float sharpness = 0.5f;             // unused (kept for the shader constant layout)
 };
 
 // RGBA layer composited above the game image (intro videos, HD text, HD menu

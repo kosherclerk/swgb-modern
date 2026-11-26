@@ -7,17 +7,17 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 ## Features
 
 **Graphics**
-- A complete DirectDraw replacement that renders the game through **Direct3D 11, Direct3D 12, Direct3D 10.1, Vulkan, OpenGL 3.3 or a software (CPU) renderer**. It falls back automatically if one isn't available. Direct3D 12 and Vulkan are marked experimental: with some AMD drivers they use a lot of CPU in the menus. The software renderer has no xBR filter and is slow at 4K.
+- A complete DirectDraw replacement that renders the game through **Direct3D 11, Direct3D 12, Direct3D 10.1, Vulkan, OpenGL 3.3 or a software (CPU) renderer**. It falls back automatically if one isn't available. Direct3D 12 and Vulkan are marked experimental: with some AMD drivers they use a lot of CPU in the menus. The software renderer is slow at 4K.
 - **Borderless fullscreen or windowed** (Alt+Enter), with no display mode switches, no palette corruption, and no crashes when you Alt-Tab.
 - **True widescreen in game** (for example 1920×1080). The game's own UI layout is rebuilt for the new width: the command panel stretches like a native widescreen UI, or you can keep the original panel centred. Menus remain 800×600 and are scaled.
 - **UI scaling**: choose your native resolution and a scale factor. The launcher shows which scales are pixel-perfect and which one is closest to the original interface size. Per-monitor DPI aware.
-- **Upscaling filters**: Nearest (lossless), Sharp-bilinear, Bilinear, and **xBR** (an edge-directed pixel-art upscaler).
+- **Upscaling filters**: Nearest (lossless), Sharp (crisp pixels, blended edges at non-integer scales) and Bilinear (soft).
 - **Smoother rendering**: units move and the battlefield is redrawn up to 60 times per second instead of 20 (the same world-update change Expanding Fronts makes), and the minimap 10 times per second instead of 3. **Game speed is unchanged**, because units move by elapsed time (verified with the in-game clock).
 - Frame limiter tied to the monitor's refresh rate, plus VSync with tearing support. Unchanged frames are not re-presented, so the mod adds little CPU load.
 
 **Optional enhancements** (all off in the *Faithful* profile, on in *Enhanced*)
-- **HD text**: the interface text is drawn again with anti-aliased fonts at screen resolution, so it stays sharp at any scale. Line breaks, spacing and alignment stay as in the original.
-- **Smooth fog of war**: fogged areas and the edge of the explored map are evenly darkened instead of drawn as a black checkerboard.
+- **Smooth text**: interface text is drawn with anti-aliased fonts (like Expanding Fronts), blended into the game's own frame. Line breaks, spacing and alignment stay as in the original.
+- **Smooth fog of war**: fogged terrain and objects keep all their detail and are evenly darkened instead of drawn as a black checkerboard.
 
 The mod ships no replacement art: everything on screen comes from your copy of the game.
 
@@ -54,7 +54,7 @@ All settings are in `Game\SWGBModern.ini` (edited by the launcher; manual edits 
 | `[Display] Renderer` | `auto`, `d3d11`, `d3d12`, `d3d10`, `vulkan`, `opengl`, `software` |
 | `[Display] Mode` | `borderless`, `windowed` |
 | `[Display] GameWidth/GameHeight` | in-game resolution (`0` = original 4:3 modes) |
-| `[Display] Filter` | `nearest`, `sharp`, `bilinear`, `xbr` |
+| `[Display] Filter` | `nearest`, `sharp`, `bilinear` |
 | `[Display] ScaleMode` | `aspect`, `integer`, `stretch` |
 | `[Widescreen] PanelStyle` | `stretch`, `center` |
 | `[Fixes] GameFPS` | battlefield redraw rate (original 20) |
@@ -68,7 +68,8 @@ Renderer changes apply the next time the game starts. Filter, scaling, window mo
 
 - `ddraw.dll` emulates the DirectDraw 1 API the Genie engine uses, with 8-bit surfaces in system memory. A presenter thread uploads each frame and its palette to the GPU, resolves the palette, and scales it in a shader. It also hooks the window and input APIs so the game always sees its own resolution.
 - Engine patches are applied **in memory** and only to executables identified byte-for-byte: Clone Campaigns 1.1 and the base game. Widescreen works through a hook on the engine's resource loader. It rewrites the interface layout table and generates wider panel art at runtime, so nothing is written to the game's data files.
-- HD text hooks `TextOutA` and `DrawTextA`: each string's glyph pixels are tagged per surface, the tags travel with blits, and the presenter replaces the visible low-resolution glyphs with text rendered at output resolution in an overlay layer.
+- Smooth text hooks `TextOutA` and `DrawTextA`/`DrawTextExA`: each string is rendered anti-aliased with the same font, blended with the pixels underneath, and written into the 8-bit surface as the nearest palette colours, so it behaves exactly like the original text.
+- Smooth fog wraps the engine's sprite blitter: fogged sprites and terrain tiles are drawn with all their pixels and then darkened through a palette lookup table instead of the black checkerboard.
 - `dsound.dll` implements DirectSound buffers on top of a WASAPI mixer.
 - The launcher is a self-contained .NET 10 WPF app that embeds both DLLs.
 
@@ -85,4 +86,4 @@ Requirements: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (i686 target)
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The xBR filter is an independent implementation of Hyllian's algorithm (MIT).
+MIT, see [LICENSE](LICENSE).

@@ -48,7 +48,7 @@ public static class SystemInfo
         public override string ToString()
         {
             string s = Scale == Math.Floor(Scale) ? $"{Scale:0}x" : $"{Scale:0.##}x";
-            string kind = Integer ? "pixel-perfect" : "non-integer - use Sharp or xBR";
+            string kind = Integer ? "pixel-perfect" : "non-integer - use the Sharp filter";
             string ui = $"{W}x{H}";
             return $"{s}  ->  {ui}  ({kind}){(ClosestToOriginal ? "  - closest to original" : "")}";
         }

@@ -1,137 +1,131 @@
-// Smooth fog (see effects.h).
+// Smooth fog of war (see effects.h).
 //
-// Engine side: two tiny routines in the THIS_COD blitter section load the
-// stipple pattern registers: four row masks and four row fills (pixel =
-// (pixel & mask) | fill, row = y & 3). setPattern4(m02, f02, m13, f13) and
-// setPattern8(const uint32_t[8]). They are replaced by equivalents that also put
-// a marker index into the fill wherever the mask clears a byte and the fill is 0
-// (the black stipple used for fog). The marker is a palette entry that is black
-// too, so the image is unchanged where the presenter does not process it.
-//
-// Presenter side: a marker pixel whose diagonal neighbours are markers as well
-// is stipple. It takes the colour of a non-stippled 4-neighbour, and the
-// stippled area is darkened through the shade plane. A 50% black stipple looks
-// like ~73% brightness (it averages in linear light), so that is the default.
+// The engine draws fogged sprites and terrain through its masked sprite blitter
+// (THIS_COD 0x651bc0 in Clone Campaigns, 0x64ebc0 in the base game) with a
+// black checkerboard pattern: pixel = (pixel & mask[row & 3]) | fill[row & 3],
+// so half of every fogged pixel pair is simply black. The blitter is wrapped;
+// for a fogged draw (pattern enabled, black fill):
+//   * a coverage pass draws the sprite with an all-marker pattern to learn
+//     exactly which pixels it covers, then the old pixels are put back;
+//   * the real draw uses a keep-everything pattern, so the sprite or terrain
+//     tile comes out with all its pixels;
+//   * those pixels are darkened through a palette table (each colour -> the
+//     nearest palette colour to it at the fog brightness), the way later Genie
+//     games shade fog.
+// Everything happens inside the 8-bit frame the engine draws, so partial
+// redraws, scrolling and every copy to the screen keep working unchanged.
 #include "effects.h"
 #include "hook.h"
+#include "ddraw_impl.h"
 #include <algorithm>
 
 namespace swgbm {
 namespace {
 
-const uint8_t kMarker = 48;            // palette 50500: black, rare in the art
 bool g_enabled = false;
-uint32_t* g_regs = nullptr;            // pattern registers: masks [0..3], fills [4..7]
-uint8_t g_shade = 94;                  // fog multiplier (x/128)
+uint8_t g_shade = 94;                       // fog brightness (x/128)
 
-void FixFills() {
-    for (int r = 0; r < 4; r++) {
-        uint32_t m = g_regs[r], f = g_regs[4 + r];
-        if (f == 0 && m != 0xFFFFFFFFu) g_regs[4 + r] = ~m & (kMarker * 0x01010101u);
+// engine blitter state (THIS_DAT); offsets from its base (0x7a4000 CC, 0x7a2000 base game)
+uint8_t*** g_rowTable = nullptr;            // +0x00: pointer to the destination's row pointers
+uint32_t* g_regs = nullptr;                 // +0x60: masks [0..3], fills [4..7]
+int32_t* g_clip = nullptr;                  // +0x80: ymin, ymax, xmin, xmax
+
+typedef void(__cdecl* BlitFn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+BlitFn g_blit = nullptr;
+const uint8_t kMarker = 48;                 // rare index; only used inside a coverage pass
+
+std::vector<uint8_t> g_save, g_cover;
+
+bool FogPattern() {
+    bool fillBlack = !g_regs[4] && !g_regs[5] && !g_regs[6] && !g_regs[7];
+    bool masked = (g_regs[0] & g_regs[1] & g_regs[2] & g_regs[3]) != 0xFFFFFFFFu;
+    return fillBlack && masked && (g_regs[0] | g_regs[1] | g_regs[2] | g_regs[3]);
+}
+
+// darkening table for the current palette: index -> nearest palette colour to
+// that colour times the fog brightness
+uint8_t g_dark[256];
+PALETTEENTRY g_darkPal[256];
+bool g_darkValid = false;
+
+void UpdateDarkTable() {
+    DDPalette* pal = State().primaryPal;
+    if (!pal) return;
+    if (g_darkValid && memcmp(g_darkPal, pal->entries_, sizeof(g_darkPal)) == 0) return;
+    memcpy(g_darkPal, pal->entries_, sizeof(g_darkPal));
+    g_darkValid = true;
+    for (int i = 0; i < 256; i++) {
+        int r = g_darkPal[i].peRed * g_shade / 128, g = g_darkPal[i].peGreen * g_shade / 128, b = g_darkPal[i].peBlue * g_shade / 128;
+        int best = i, bestD = INT_MAX;
+        for (int j = 0; j < 256; j++) {
+            int dr = g_darkPal[j].peRed - r, dg = g_darkPal[j].peGreen - g, db = g_darkPal[j].peBlue - b;
+            int d = 3 * dr * dr + 4 * dg * dg + 2 * db * db;
+            if (d < bestD) { bestD = d; best = j; }
+        }
+        g_dark[i] = (uint8_t)best;
     }
 }
 
-// mov [60],a; [68],a; [70],b; [78],b; [64],c; [6c],c; [74],d; [7c],d
-void __cdecl SetPattern4(uint32_t m02, uint32_t f02, uint32_t m13, uint32_t f13) {
-    g_regs[0] = g_regs[2] = m02;
-    g_regs[4] = g_regs[6] = f02;
-    g_regs[1] = g_regs[3] = m13;
-    g_regs[5] = g_regs[7] = f13;
-    FixFills();
-}
-void __cdecl SetPattern8(const uint32_t* p) {
-    for (int i = 0; i < 8; i++) g_regs[i] = p[i];
-    FixFills();
-}
-
-std::vector<uint16_t> g_rowStipple;    // stippled pixels per row (to drop the plane when none)
-long g_total = 0;
-
-inline bool M(const uint8_t* px, int w, int h, int x, int y) {
-    return x >= 0 && y >= 0 && x < w && y < h && px[(size_t)y * w + x] == kMarker;
+void __cdecl BlitHook(uint32_t a1, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t a6, uint32_t a7, uint32_t flags) {
+    if (!(flags & 1) || !FogPattern()) { g_blit(a1, x, y, w, h, a6, a7, flags); return; }
+    // clipped rectangle (the blitter's own clip: y in [ymin,ymax], x in [xmin,xmax])
+    int x0 = std::max<int>((int)x, g_clip[2]), x1 = std::min<int>((int)x + (int)w - 1, g_clip[3]);
+    int y0 = std::max<int>((int)y, g_clip[0]), y1 = std::min<int>((int)y + (int)h - 1, g_clip[1]);
+    uint8_t** rows = *g_rowTable;
+    UpdateDarkTable();
+    if (x1 < x0 || y1 < y0 || !rows || !g_darkValid) { g_blit(a1, x, y, w, h, a6, a7, flags); return; }
+    // coverage pass: marker everywhere the sprite draws, then the old pixels back
+    int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
+    g_save.resize((size_t)rw * rh);
+    g_cover.resize((size_t)rw * rh);
+    for (int yy = 0; yy < rh; yy++) memcpy(&g_save[(size_t)yy * rw], rows[y0 + yy] + x0, rw);
+    uint32_t saved[8];
+    memcpy(saved, g_regs, sizeof(saved));
+    for (int i = 0; i < 4; i++) { g_regs[i] = 0; g_regs[4 + i] = kMarker * 0x01010101u; }
+    g_blit(a1, x, y, w, h, a6, a7, flags);
+    for (int yy = 0; yy < rh; yy++) {
+        uint8_t* row = rows[y0 + yy] + x0;
+        const uint8_t* before = &g_save[(size_t)yy * rw];
+        uint8_t* cv = &g_cover[(size_t)yy * rw];
+        for (int xx = 0; xx < rw; xx++) cv[xx] = row[xx] == kMarker && before[xx] != kMarker;
+        memcpy(row, before, rw);
+    }
+    // the real draw with all the sprite's pixels, then those pixels darkened
+    for (int i = 0; i < 4; i++) { g_regs[i] = 0xFFFFFFFFu; g_regs[4 + i] = 0; }
+    g_blit(a1, x, y, w, h, a6, a7, flags);
+    memcpy(g_regs, saved, sizeof(saved));
+    for (int yy = 0; yy < rh; yy++) {
+        uint8_t* row = rows[y0 + yy] + x0;
+        const uint8_t* cv = &g_cover[(size_t)yy * rw];
+        for (int xx = 0; xx < rw; xx++) if (cv[xx]) row[xx] = g_dark[row[xx]];
+    }
 }
 
 } // namespace
 
-void Effects::InstallEngineHooks(uintptr_t setPattern4, uintptr_t setPattern8, uintptr_t patternRegs) {
+void Effects::InstallEngineHooks(uintptr_t blitter, uintptr_t blitState) {
     g_enabled = CfgBool("Enhancements", "SmoothFog", false);
     if (!g_enabled) return;
     int pct = std::max(30, std::min(100, CfgInt("Enhancements", "FogBrightness", 73)));
     g_shade = (uint8_t)(pct * 128 / 100);
-    g_regs = (uint32_t*)patternRegs;
-    // verify both routines before replacing them
-    static const uint8_t p4[] = {0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x08, 0xA3};
-    static const uint8_t p8[] = {0x55, 0x8B, 0xEC, 0x53, 0x56, 0x8B, 0x75, 0x08};
-    bool ok = PatchCheck(setPattern4, p4, sizeof(p4)) && PatchCheck(setPattern8, p8, sizeof(p8)) &&
-              PatchJump(setPattern4, (void*)&SetPattern4, 5) && PatchJump(setPattern8, (void*)&SetPattern8, 5);
-    LOG("smooth fog: %s (brightness %d%%)", ok ? "pattern hooks installed" : "engine code not recognised - disabled", pct);
+    g_rowTable = (uint8_t***)blitState;
+    g_regs = (uint32_t*)(blitState + 0x60);
+    g_clip = (int32_t*)(blitState + 0x80);
+    static const uint8_t prologue[] = {0x55, 0x8B, 0xEC, 0x53, 0x56};   // push ebp; mov ebp,esp; push ebx; push esi
+    bool ok = PatchCheck(blitter, prologue, sizeof(prologue));
+    if (ok) {
+        auto tramp = (uint8_t*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        memcpy(tramp, prologue, sizeof(prologue));
+        tramp[5] = 0xE9;
+        int32_t rel = (int32_t)((blitter + 5) - ((uintptr_t)tramp + 10));
+        memcpy(tramp + 6, &rel, 4);
+        g_blit = (BlitFn)tramp;
+        ok = PatchJump(blitter, (void*)&BlitHook, 5);
+    }
+    LOG("smooth fog: %s (brightness %d%%)", ok ? "sprite blitter hooked" : "engine code not recognised - disabled", pct);
     if (!ok) g_enabled = false;
 }
 
 bool Effects::Enabled() { return g_enabled; }
-
-bool Effects::Compose(const Frame& in, Frame& out, bool forceFull) {
-    if (!g_enabled) return false;
-    const int W = in.width, H = in.height;
-    bool full = forceFull || out.width != W || out.height != H || out.pixels.size() != in.pixels.size();
-    if (full) {
-        out.width = W; out.height = H;
-        out.pixels = in.pixels;
-        out.shade.assign((size_t)W * H, 128);
-        g_rowStipple.assign(H, 0);
-        g_total = 0;
-    }
-    memcpy(out.palette, in.palette, sizeof(out.palette));
-    out.paletteChanged = in.paletteChanged || full;
-    // rows to redo: changed rows plus one row around them (neighbour tests)
-    int y0 = full ? 0 : std::max(0, in.dirtyY0 - 1), y1 = full ? H : std::min(H, in.dirtyY1 + 1);
-    if (in.dirtyY1 <= in.dirtyY0 && !full) { y0 = y1 = 0; }
-    const uint8_t* px = in.pixels.data();
-    for (int y = y0; y < y1; y++) {
-        const uint8_t* s = px + (size_t)y * W;
-        uint8_t* d = out.pixels.data() + (size_t)y * W;
-        uint8_t* k = out.shade.data() + (size_t)y * W;
-        memcpy(d, s, W);
-        memset(k, 128, W);
-        int n = 0;
-        for (int x = 0; x < W; x++) {
-            if (s[x] != kMarker) continue;
-            // checkerboard neighbours: diagonals, or 2 pixels along the row/column
-            // (at the edge of a stippled sprite the diagonals may be outside it)
-            if (!(M(px, W, H, x - 1, y - 1) || M(px, W, H, x + 1, y - 1) || M(px, W, H, x - 1, y + 1) || M(px, W, H, x + 1, y + 1) ||
-                  M(px, W, H, x - 2, y) || M(px, W, H, x + 2, y) || M(px, W, H, x, y - 2) || M(px, W, H, x, y + 2))) continue;
-            n++;
-            // colour from a non-stippled 4-neighbour
-            int c = -1;
-            if (x > 0 && s[x - 1] != kMarker) c = s[x - 1];
-            else if (x + 1 < W && s[x + 1] != kMarker) c = s[x + 1];
-            else if (y > 0 && px[(size_t)(y - 1) * W + x] != kMarker) c = px[(size_t)(y - 1) * W + x];
-            else if (y + 1 < H && px[(size_t)(y + 1) * W + x] != kMarker) c = px[(size_t)(y + 1) * W + x];
-            d[x] = c >= 0 ? (uint8_t)c : 0;
-            k[x] = g_shade;
-            if (x > 0) k[x - 1] = g_shade;
-            if (x + 1 < W) k[x + 1] = g_shade;
-        }
-        g_total += n - g_rowStipple[y];
-        g_rowStipple[y] = (uint16_t)n;
-    }
-    // vertical neighbours of stipple are fogged too (rows above/below a changed row)
-    for (int y = y0; y < y1; y++) {
-        uint8_t* k = out.shade.data() + (size_t)y * W;
-        const uint8_t* s = px + (size_t)y * W;
-        for (int dy = -1; dy <= 1; dy += 2) {
-            int yy = y + dy;
-            if (yy < 0 || yy >= H || !g_rowStipple[yy]) continue;
-            const uint8_t* ss = px + (size_t)yy * W;
-            for (int x = 0; x < W; x++)
-                if (ss[x] == kMarker && s[x] != kMarker) k[x] = g_shade;
-        }
-    }
-    out.dirtyY0 = y1 > y0 ? y0 : 0;
-    out.dirtyY1 = y1 > y0 ? y1 : 0;
-    if (full) out.dirtyY1 = H;
-    out.text.clear();
-    return true;
-}
 
 } // namespace swgbm

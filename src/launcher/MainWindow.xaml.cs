@@ -52,7 +52,7 @@ public partial class MainWindow : Window
         if (_vm.Prefs.Profile != null) return;
         var r = MessageBox.Show(this,
             "How would you like to play?\n\n" +
-            "YES - Enhanced: widescreen, smooth 60 fps rendering, upscaling filter, HD text and smooth fog of war.\n\n" +
+            "YES - Enhanced: widescreen, smooth 60 fps rendering and the Sharp upscaling filter.\n\n" +
             "NO - Faithful: the original look (4:3, 20 fps redraw, plain pixels). Only compatibility fixes " +
             "(modern renderer, audio, crash and CPU fixes) are applied.\n\nYou can change every option later on the Components tab.",
             "SWGB Modern - choose a profile", MessageBoxButton.YesNo, MessageBoxImage.Question);

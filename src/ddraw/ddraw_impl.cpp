@@ -194,7 +194,6 @@ void DDSurface::SwapContents(DDSurface* o) {
     std::swap(dc_, o->dc_);
     std::swap(oldBmp_, o->oldBmp_);
     std::swap(pitch_, o->pitch_);
-    std::swap(tplane_, o->tplane_);
 }
 
 DDSurface* SurfaceFromDC(HDC dc) {
@@ -261,8 +260,6 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
             RECT s = d;
             if (!ClipBlt(d, s, w_, h_, w_, h_, false)) return DD_OK;
             for (LONG y = d.top; y < d.bottom; y++) memset(bits_ + y * pitch_ + d.left, c, d.right - d.left);
-            if (!tplane_.empty())
-                for (LONG y = d.top; y < d.bottom; y++) memset(&tplane_[(size_t)y * pitch_ + d.left], 0, (d.right - d.left) * 4);
         } else if (src) {
             RECT s = srcRect ? *srcRect : RECT{0, 0, src->w_, src->h_};
             bool stretch = (s.right - s.left) != (d.right - d.left) || (s.bottom - s.top) != (d.bottom - d.top);
@@ -286,28 +283,11 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
                     int y = backwards ? dh - 1 - i : i;
                     memmove(bits_ + (d.top + y) * pitch_ + d.left, src->bits_ + (s.top + y) * src->pitch_ + s.left, dw);
                 }
-                // carry HD-text tags along with the pixels
-                if (!src->tplane_.empty()) {
-                    uint32_t* tp = TPlane();
-                    const uint32_t* sp2 = src->tplane_.data();
-                    for (int i = 0; i < dh; i++) {
-                        int y = backwards ? dh - 1 - i : i;
-                        memmove(tp + (size_t)(d.top + y) * pitch_ + d.left, sp2 + (size_t)(s.top + y) * src->pitch_ + s.left, (size_t)dw * 4);
-                    }
-                } else if (!tplane_.empty()) {
-                    for (int y = 0; y < dh; y++) memset(&tplane_[(size_t)(d.top + y) * pitch_ + d.left], 0, (size_t)dw * 4);
-                }
             } else {
                 std::vector<uint8_t> tmp;
                 const uint8_t* sb = src->bits_;
                 int sp = src->pitch_;
                 if (src == this) { tmp.assign(bits_, bits_ + (size_t)pitch_ * h_); sb = tmp.data(); }
-                // tags: copied for keyed 1:1 blits, cleared for stretched/mirrored ones
-                std::vector<uint32_t> ttmp;
-                const uint32_t* stp = nullptr;
-                bool tagCopy = !stretch && !mirLR && !mirUD && !src->tplane_.empty();
-                if (tagCopy) { stp = src->tplane_.data(); if (src == this) { ttmp = tplane_; stp = ttmp.data(); } }
-                if (!tplane_.empty() || tagCopy) TPlane();
                 for (int y = 0; y < dh; y++) {
                     int sy = s.top + (int)((int64_t)y * sh / dh);
                     if (mirUD) sy = s.bottom - 1 - (sy - s.top);
@@ -319,7 +299,6 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
                         uint8_t c = srow[sx];
                         if (key && c >= lo && c <= hi) continue;
                         drow[x] = c;
-                        if (!tplane_.empty()) tplane_[(size_t)(d.top + y) * pitch_ + d.left + x] = tagCopy ? stp[(size_t)sy * sp + sx] : 0;
                     }
                 }
             }
@@ -529,18 +508,11 @@ bool SnapshotPrimary(Frame& out) {
     // The engine re-blits the whole back buffer even when nothing moved, so
     // compare with the previous snapshot and keep only rows that really changed.
     int c0 = INT_MAX, c1 = 0;
-    bool tags = !p->tplane_.empty();
-    bool tagsNew = tags && out.text.size() != out.pixels.size();
-    if (tagsNew) { out.text.assign(out.pixels.size(), 0); y0 = 0; y1 = p->h_; }
-    if (!tags && !out.text.empty()) out.text.clear();
-    // Text tags only matter where the pixels changed (identical redraws reuse
-    // the same tags), so they are copied along with changed rows only.
     for (int y = y0; y < y1; y++) {
         uint8_t* dst = out.pixels.data() + (size_t)y * p->w_;
         const uint8_t* src = p->bits_ + (size_t)y * p->pitch_;
-        if (!resized && !tagsNew && memcmp(dst, src, p->w_) == 0) continue;
+        if (!resized && memcmp(dst, src, p->w_) == 0) continue;
         memcpy(dst, src, p->w_);
-        if (tags) memcpy(out.text.data() + (size_t)y * p->w_, p->tplane_.data() + (size_t)y * p->pitch_, (size_t)p->w_ * 4);
         c0 = std::min(c0, y); c1 = y + 1;
     }
     out.dirtyY0 = c0 < c1 ? c0 : 0;

@@ -5,7 +5,7 @@
 # Also tests windowed mode, an odd window size and Alt+Enter, and measures CPU.
 param([string]$Game = 'C:\Users\user\Desktop\claude\swgb\Game', [string]$Out = "$env:TEMP\matrix",
       [string[]]$Renderers = @('d3d11', 'd3d10', 'd3d12', 'opengl', 'vulkan', 'software'),
-      [string[]]$Filters = @('nearest', 'sharp', 'bilinear', 'xbr'))
+      [string[]]$Filters = @('nearest', 'sharp', 'bilinear'))
 $ErrorActionPreference = 'Continue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $inp = "$env:TEMP\inp.exe"

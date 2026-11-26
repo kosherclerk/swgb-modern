@@ -2,7 +2,7 @@
 // Works everywhere (VMs, RDP, broken drivers).
 //  - Nearest: exact integer-mapped scaling straight into a viewport-sized DIB;
 //    only rows whose source rows changed are recomputed, in parallel.
-//  - Sharp (and xBR, which is GPU-only): nearest pre-scale to the largest
+//  - Sharp: nearest pre-scale to the largest
 //    integer factor, then GDI HALFTONE for the small remaining fraction.
 //  - Bilinear: game-size conversion, GDI HALFTONE stretch.
 #include "../renderer.h"

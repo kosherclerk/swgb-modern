@@ -75,10 +75,6 @@ public:
     DDSurface* attached_ = nullptr;   // next surface in the flip chain (back buffer)
     DDSurface* chainOwner_ = nullptr; // primary that owns this back buffer
     std::vector<DDSurface*> chain_;   // primary: [front, back1, back2...]
-    // HD text: per-pixel text tags (item id + glyph-local position), same
-    // layout as bits_ (pitch_). Empty until text is drawn into / copied to it.
-    std::vector<uint32_t> tplane_;
-    uint32_t* TPlane() { if (tplane_.empty()) tplane_.assign((size_t)pitch_ * h_, 0); return tplane_.data(); }
 };
 
 class DDPalette : public IDirectDrawPalette {
