@@ -19,6 +19,10 @@ def read_bmp(path):
     for y in range(h):
         ry = h - 1 - y if bottom_up else y
         rows.append(d[off + ry * bpr: off + ry * bpr + w * bpp // 8])
+    if bpp == 8:  # indexed frame dump: expand through its palette to BGR
+        pal = [d[54 + i * 4:54 + i * 4 + 3] for i in range(256)]
+        rows = [b''.join(pal[v] for v in r) for r in rows]
+        return w, h, 3, rows
     return w, h, bpp // 8, rows
 
 

@@ -140,21 +140,20 @@ static void DumpFrameBMP(const Frame& f) {
     std::wstring path = GameDir() + L"\\SWGBModern_frame.bmp";
     FILE* fp = _wfopen(path.c_str(), L"wb");
     if (!fp) return;
-    int w = f.width, h = f.height, stride = w * 3 + ((4 - (w * 3) % 4) % 4);
+    // 8-bit indexed: the exact palette indices the engine drew, plus its palette
+    int w = f.width, h = f.height, stride = (w + 3) & ~3;
     BITMAPFILEHEADER fh = {};
     BITMAPINFOHEADER ih = {};
     fh.bfType = 0x4D42;
-    fh.bfOffBits = sizeof(fh) + sizeof(ih);
+    fh.bfOffBits = sizeof(fh) + sizeof(ih) + 256 * 4;
     fh.bfSize = fh.bfOffBits + stride * h;
-    ih.biSize = sizeof(ih); ih.biWidth = w; ih.biHeight = h; ih.biPlanes = 1; ih.biBitCount = 24;
+    ih.biSize = sizeof(ih); ih.biWidth = w; ih.biHeight = h; ih.biPlanes = 1; ih.biBitCount = 8; ih.biClrUsed = 256;
     fwrite(&fh, sizeof(fh), 1, fp);
     fwrite(&ih, sizeof(ih), 1, fp);
+    for (int i = 0; i < 256; i++) { uint32_t c = f.palette[i] & 0xFFFFFF; fwrite(&c, 4, 1, fp); }
     std::vector<uint8_t> row(stride, 0);
     for (int y = h - 1; y >= 0; y--) {
-        for (int x = 0; x < w; x++) {
-            uint32_t c = f.palette[f.pixels[(size_t)y * w + x]];
-            row[x * 3] = c & 0xFF; row[x * 3 + 1] = (c >> 8) & 0xFF; row[x * 3 + 2] = (c >> 16) & 0xFF;
-        }
+        memcpy(row.data(), f.pixels.data() + (size_t)y * w, w);
         fwrite(row.data(), 1, stride, fp);
     }
     fclose(fp);

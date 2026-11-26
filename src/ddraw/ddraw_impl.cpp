@@ -580,6 +580,7 @@ HRESULT DDraw::CreateClipper(DWORD, LPDIRECTDRAWCLIPPER* out, IUnknown*) {
 HRESULT DDraw::CreatePalette(DWORD flags, LPPALETTEENTRY e, LPDIRECTDRAWPALETTE* out, IUnknown*) {
     if (!out) return DDERR_INVALIDPARAMS;
     *out = new DDPalette(flags, e);
+    LOG("CreatePalette flags=%08lx", flags);
     return DD_OK;
 }
 HRESULT DDraw::CreateSurface(LPDDSURFACEDESC d, LPDIRECTDRAWSURFACE* out, IUnknown*) {
