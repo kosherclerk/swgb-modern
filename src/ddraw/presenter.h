@@ -44,6 +44,9 @@ private:
     Overlay ovShared_;        // written by producers under ovLock_
     bool ovChanged_ = false;
     Overlay ovRender_;        // presenter-thread copy handed to the backend
+    Overlay hdOverlay_;       // HD menu background composite
+    bool hdActive_ = false;
+    const Overlay* lastOverlay_ = nullptr;
     Viewport vp_ = {0, 0, 800, 600};
     int gameW_ = 800, gameH_ = 600;
     const char* backendName_ = "none";

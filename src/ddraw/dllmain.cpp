@@ -4,6 +4,7 @@
 #include "patches.h"
 #include "audiofix.h"
 #include "crash.h"
+#include "hdmenus.h"
 
 using namespace swgbm;
 
@@ -14,6 +15,7 @@ static void Init() {
     g_init = true;
     GameExe exe = DetectExe();
     LOG("SWGB Modern ddraw loaded into %s build", ExeName(exe));
+    HdMenus::Init();
     Window::InstallHooks();
     AudioFix::Install();
     Patches::Apply(exe);

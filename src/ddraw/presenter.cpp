@@ -1,6 +1,7 @@
 #include "presenter.h"
 #include "ddraw_impl.h"
 #include "window.h"
+#include "hdmenus.h"
 #include <algorithm>
 #include <math.h>
 
@@ -284,7 +285,24 @@ void Presenter::Run() {
         }
         LeaveCriticalSection(&ovLock_);
         if (forceFull && ovRender_.visible) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
-        r->SetOverlay(&ovRender_);
+        const Overlay* use = ovRender_.visible ? &ovRender_ : nullptr;
+        if (!use && have) {
+            bool wasHd = hdActive_;
+            hdActive_ = HdMenus::Compose(frame, hdOverlay_);
+            if (hdActive_) {
+                if (!wasHd || forceFull) { hdOverlay_.dirtyY0 = 0; hdOverlay_.dirtyY1 = hdOverlay_.height; }
+                ovDirty = ovDirty || hdOverlay_.dirtyY1 > hdOverlay_.dirtyY0 || !wasHd;
+                use = &hdOverlay_;
+            } else if (wasHd) {
+                ovDirty = true; // HD background went away
+            }
+        } else if (hdActive_) {
+            hdActive_ = false;
+            HdMenus::Invalidate();
+        }
+        if (use == &ovRender_ && lastOverlay_ != &ovRender_) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
+        lastOverlay_ = use;
+        r->SetOverlay(use);
         bool skip = !frame.Dirty() && !resized && !ovDirty && r->SkipIdenticalFrames();
         if (skip) skipped++;
         else {

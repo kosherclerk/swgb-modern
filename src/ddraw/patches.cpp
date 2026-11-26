@@ -112,7 +112,13 @@ void ApplyEngine(const ExeLayout& L) {
     LOG("engine patches for %s", L.name);
     ApplyFrameRate(L);
     int W = CfgInt("Display", "GameWidth", 0), H = CfgInt("Display", "GameHeight", 0);
-    if (!(CfgBool("Fixes", "Widescreen", true) && W >= 800 && H >= 600 && !(W == 1280 && H == 1024))) return;
+    bool widescreen = CfgBool("Fixes", "Widescreen", true) && W >= 800 && H >= 600 && !(W == 1280 && H == 1024);
+    static const uint8_t resPrologue[] = {0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x0C};
+    // The resource hook serves widescreen layouts/panels and HD menu detection.
+    if (widescreen || CfgBool("Enhancements", "HDMenus", false))
+        Resources::Install(L.resGetter, L.gameFree, resPrologue, sizeof(resPrologue), widescreen ? W : 0, widescreen ? H : 0,
+                           widescreen ? std::initializer_list<uint32_t>{L.layoutTableId} : std::initializer_list<uint32_t>{});
+    if (!widescreen) return;
     // Registry "Screen Size" == 1280 -> custom W x H.
     // mov edx,[ebp+24]; mov [edx+8f4],eax; mov eax,[ebp+24]; mov [eax+8fc],ecx
     Cave c;
@@ -135,8 +141,6 @@ void ApplyEngine(const ExeLayout& L) {
     e.raw({0xFF, 0x52, 0x68});                         // call [edx+68]
     e.u8(0xC3);                                        // ret
     Detour(L.enterGameRes, {0x8B, 0x41, 0x24, 0x8B, 0x11}, e, "widescreen: enter game resolution");
-    static const uint8_t resPrologue[] = {0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x0C};
-    Resources::Install(L.resGetter, L.gameFree, resPrologue, sizeof(resPrologue), W, H, {L.layoutTableId});
     int ok = 0;
     for (auto& site : L.sites) ok += PatchImm(site.at, site.oldv, site.kind == 'W' ? W : H);
     LOG("widescreen: %d/%d immediate sites patched for %dx%d", ok, (int)L.sites.size(), W, H);
