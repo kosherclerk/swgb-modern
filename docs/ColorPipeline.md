@@ -93,3 +93,24 @@ and fog.
 ![Checkerboard cells (magenta) in a live frame](img/checkerboard-map.png)
 
 ![Zoom: fog stipple, smooth shadow, grainy terrain art](img/fog-terrain-zoom.png)
+
+## 6. Can the engine's palette be expanded (or the engine made true-colour)?
+
+**About AoE2 DE.** SWGB runs on the Genie engine of *Age of Empires II: The Age of Kings*. AoE2 DE is not an upgraded Genie: it is a new engine with new 32-bit 4K art, so neither its code nor its art can be reused for SWGB. Anything "DE-like" for SWGB has to be built from SWGB's own engine and art.
+
+**Why a bigger palette alone gives nothing.** Every sprite is stored as 8-bit palette indices (about 100,000 unit/building frames, 438 Mpx in `graphics*.drs`; 3,562 terrain frames; 8,811 interface frames). A 16-bit or 32-bit palette would map the same indices to the same colours. Colours that do not exist in the art cannot appear unless something *computes* new colours: fog, shadows, lighting and blending, or new art.
+
+**What drawing involves.** All drawing happens in a small number of places:
+- two C++ drawers: sprites (SLP) around `0x5430xx`, and terrain tiles around `0x60e000-0x60f4xx`;
+- 11 hand-written assembly helpers in the `THIS_COD` section (48 KB), called from 59 sites: pattern setup, fills, blits;
+- GDI text (already hooked for HD text).
+
+The engine writes bytes directly into 8-bit surfaces. Those surfaces are ours (SWGB Modern emulates DirectDraw), but the writers assume one byte per pixel.
+
+| Approach | What it means | Effort | Result |
+|---|---|---|---|
+| A. Convert the engine to 32-bit | Rewrite all the blitters and drawers for 4-byte pixels, plus the shadow/lighting/fog tables, minimap, palette effects and text | Very large (weeks of reverse engineering); high risk to stability and multiplayer sync | By itself, the same colours as now; only fog, shadows and lighting become smooth |
+| B. 32-bit effects layer | Hook the fog, shadow and terrain-light drawing to record *how much* to darken or light each pixel in a side plane (like the HD text tags) instead of writing stipple or table colours; the presenter applies smooth RGB darkening | Medium | Smooth fog, shadows and hill lighting in true colour; engine logic untouched |
+| C. HD sprite layer | Hook the sprite and terrain drawers to tag pixels with *sprite, frame, player, position* (the HD-text mechanism generalised). The presenter replaces tagged pixels with true-colour high-resolution versions made offline (AI upscale + de-dither, player colour from masks) | Large: engine hooks are medium, but the assets are big (about 100k frames; 4x upscale ~7 Gpx, likely 1-3 GB even compressed) | "DE-like" sharp true-colour units, buildings and terrain, while the engine stays 8-bit internally (multiplayer-safe) |
+
+B is the realistic first step and matches the "optional, original stays default" requirement. It reuses the overlay and tag-plane code. C builds on B's hooks and can grow incrementally (for example terrain first, then buildings, then units) with downloadable packs.
