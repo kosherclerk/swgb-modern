@@ -24,6 +24,7 @@ struct Frame {
     // when the palette differs. Both are "everything" after a size change.
     int dirtyY0 = 0, dirtyY1 = 0;
     bool paletteChanged = true;
+    std::vector<uint32_t> text;         // HD-text tags of the front buffer (empty = none)
     bool Dirty() const { return dirtyY1 > dirtyY0 || paletteChanged; }
     void MarkAll() { dirtyY0 = 0; dirtyY1 = height; paletteChanged = true; }
 };

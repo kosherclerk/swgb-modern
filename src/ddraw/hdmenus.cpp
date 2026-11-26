@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <thread>
 #include <math.h>
+#include <climits>
 
 namespace swgbm {
 namespace {
@@ -37,6 +38,7 @@ std::map<uint32_t, std::shared_ptr<Bg>> g_bgs;   // crc -> background
 std::map<uint32_t, bool> g_checked;              // crc -> has HD file
 std::shared_ptr<Bg> g_active;
 bool g_forceFull = true;
+std::vector<uint8_t> g_mask;   // mask of the active background as last composited
 
 uint32_t Crc32(const uint8_t* d, size_t n) {
     static uint32_t table[256];
@@ -145,7 +147,7 @@ bool HdMenus::Compose(const Frame& f, Overlay& out) {
         }
         if (bestScore < 0.5) best = nullptr;
     }
-    if (best != g_active) { g_active = best; g_forceFull = true; }
+    if (best != g_active) { g_active = best; g_forceFull = true; g_mask.clear(); }
     if (!g_active) { g_forceFull = true; return false; }
     if (!frameChanged) { out.dirtyY0 = out.dirtyY1 = 0; return true; }
 
@@ -155,21 +157,39 @@ bool HdMenus::Compose(const Frame& f, Overlay& out) {
     out.width = b.hw; out.height = b.hh;
     out.x = (float)b.x; out.y = (float)b.y; out.w = (float)b.w; out.h = (float)b.h;
     out.visible = true; out.hideFrame = false;
-    // HD rows affected by the changed game rows (+1 row margin for the bilinear mask)
-    int gy0 = full ? 0 : std::max(0, f.dirtyY0 - b.y - 1), gy1 = full ? b.h : std::min(b.h, f.dirtyY1 - b.y + 1);
-    if (!full && f.paletteChanged) { gy0 = 0; gy1 = b.h; }
-    int hy0 = std::max(0, (int)((int64_t)gy0 * b.hh / b.h) - 2), hy1 = std::min(b.hh, (int)((int64_t)gy1 * b.hh / b.h) + 2);
-    if (hy1 <= hy0) { out.dirtyY0 = out.dirtyY1 = 0; g_forceFull = false; return true; }
-
-    // mask(game pixel) = 1 where the screen still shows the original background
-    std::vector<uint8_t> mask((size_t)b.w * b.h);
-    for (int y = std::max(0, gy0 - 1); y < std::min(b.h, gy1 + 1); y++) {
+    // game rows the presenter reported as changed
+    int gy0 = full ? 0 : std::max(0, f.dirtyY0 - b.y), gy1 = full ? b.h : std::min(b.h, f.dirtyY1 - b.y);
+    // mask(game pixel) = 1 where the screen still shows the original
+    // background. The HD result depends only on the mask (not the palette), so
+    // only rows whose mask actually changed are recomposited.
+    if (g_mask.size() != (size_t)b.w * b.h) { g_mask.assign((size_t)b.w * b.h, 0); full = true; gy0 = 0; gy1 = b.h; }
+    int cy0 = INT_MAX, cy1 = -1;
+    for (int y = gy0; y < gy1; y++) {
         const uint8_t* fr = f.pixels.data() + (size_t)(b.y + y) * f.width + b.x;
         const int16_t* br = b.idx.data() + (size_t)y * b.w;
-        uint8_t* m = mask.data() + (size_t)y * b.w;
-        for (int x = 0; x < b.w; x++) m[x] = (br[x] >= 0 && fr[x] == (uint8_t)br[x]) ? 255 : 0;
+        uint8_t* m = g_mask.data() + (size_t)y * b.w;
+        bool rowChanged = false;
+        for (int x = 0; x < b.w; x++) {
+            uint8_t v = (br[x] >= 0 && fr[x] == (uint8_t)br[x]) ? 255 : 0;
+            if (v != m[x]) { m[x] = v; rowChanged = true; }
+        }
+        if (rowChanged) { cy0 = std::min(cy0, y); cy1 = std::max(cy1, y + 1); }
     }
+    if (full) { cy0 = 0; cy1 = b.h; }
+    if (cy1 <= cy0) { out.dirtyY0 = out.dirtyY1 = 0; g_forceFull = false; return true; }
+    // HD rows affected (+1 game row margin for the bilinear mask)
+    int hy0 = std::max(0, (int)((int64_t)(cy0 - 1) * b.hh / b.h) - 2), hy1 = std::min(b.hh, (int)((int64_t)(cy1 + 1) * b.hh / b.h) + 2);
+    const std::vector<uint8_t>& mask = g_mask;
     const float sx = (float)b.w / b.hw, sy = (float)b.h / b.hh;
+    // per-column sampling positions (same for every row)
+    std::vector<int> tx0(b.hw), tx1(b.hw);
+    std::vector<float> tfx(b.hw);
+    for (int X = 0; X < b.hw; X++) {
+        float gx = (X + 0.5f) * sx - 0.5f;
+        int x0 = std::max(0, std::min(b.w - 1, (int)floorf(gx)));
+        tx0[X] = x0; tx1[X] = std::min(b.w - 1, x0 + 1);
+        tfx[X] = std::max(0.0f, std::min(1.0f, gx - x0));
+    }
     auto work = [&](int r0, int r1) {
         for (int Y = r0; Y < r1; Y++) {
             float gy = (Y + 0.5f) * sy - 0.5f;
@@ -180,11 +200,13 @@ bool HdMenus::Compose(const Frame& f, Overlay& out) {
             const uint32_t* src = b.hd.data() + (size_t)Y * b.hw;
             uint32_t* dst = out.pixels.data() + (size_t)Y * b.hw;
             for (int X = 0; X < b.hw; X++) {
-                float gx = (X + 0.5f) * sx - 0.5f;
-                int x0 = std::max(0, std::min(b.w - 1, (int)floorf(gx))), x1 = std::min(b.w - 1, x0 + 1);
-                float fx = std::max(0.0f, std::min(1.0f, gx - x0));
-                float a = ((m0[x0] * (1 - fx) + m0[x1] * fx) * (1 - fy) + (m1[x0] * (1 - fx) + m1[x1] * fx) * fy) / 255.0f;
+                int x0 = tx0[X], x1 = tx1[X];
                 uint32_t c = src[X];
+                int s4 = m0[x0] + m0[x1] + m1[x0] + m1[x1];
+                if (s4 == 0) { dst[X] = 0; continue; }
+                if (s4 == 4 * 255 && (c >> 24) == 255) { dst[X] = c; continue; }
+                float fx = tfx[X];
+                float a = ((m0[x0] * (1 - fx) + m0[x1] * fx) * (1 - fy) + (m1[x0] * (1 - fx) + m1[x1] * fx) * fy) / 255.0f;
                 a *= (c >> 24) / 255.0f;
                 uint32_t A = (uint32_t)(a * 255 + 0.5f);
                 uint32_t R = (uint32_t)(((c >> 16) & 0xFF) * a + 0.5f), G = (uint32_t)(((c >> 8) & 0xFF) * a + 0.5f),

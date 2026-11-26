@@ -2,6 +2,7 @@
 #include "ddraw_impl.h"
 #include "window.h"
 #include "hdmenus.h"
+#include "textlayer.h"
 #include <algorithm>
 #include <math.h>
 
@@ -210,6 +211,7 @@ void Presenter::Run() {
 
     Frame frame;
     DWORD frames = 0, uniqueFrames = 0, skipped = 0, fpsTick = GetTickCount();
+    int64_t tSnap = 0, tText = 0, tPres = 0;
     bool forceFull = true;
     int lastCw = -1, lastCh = -1;
     while (running_) {
@@ -234,7 +236,9 @@ void Presenter::Run() {
             }
         }
         if (r) r->WaitForNextFrame();
+        LARGE_INTEGER tA, tB, tC, tD; QueryPerformanceCounter(&tA);
         bool have = SnapshotPrimary(frame);
+        QueryPerformanceCounter(&tB); tSnap += tB.QuadPart - tA.QuadPart;
         InterlockedExchange(&pendingFlip_, 0);
         SetEvent(consumedEvent_);
         if (!have && r) {
@@ -300,10 +304,32 @@ void Presenter::Run() {
             hdActive_ = false;
             HdMenus::Invalidate();
         }
+        // HD text on top of the HD menu (or on its own canvas at viewport resolution)
+        Frame* show = &frame;
+        if (use != &ovRender_ && have && TextLayer::Enabled() && !frame.text.empty()) {
+            Viewport tvp = ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
+            const Overlay* base = hdActive_ ? &hdOverlay_ : nullptr;
+            int cw = base ? base->width : std::max(1, tvp.w), chh = base ? base->height : std::max(1, tvp.h);
+            float rx = base ? base->x : 0, ry = base ? base->y : 0, rw = base ? base->w : (float)frame.width, rh = base ? base->h : (float)frame.height;
+            bool wasText = textActive_;
+            QueryPerformanceCounter(&tC);
+            textActive_ = TextLayer::Compose(frame, textDisp_, base, cw, chh, rx, ry, rw, rh, textOverlay_);
+            QueryPerformanceCounter(&tD); tText += tD.QuadPart - tC.QuadPart;
+            if (textActive_) {
+                if (!wasText || forceFull || lastOverlay_ != &textOverlay_) { textOverlay_.dirtyY0 = 0; textOverlay_.dirtyY1 = textOverlay_.height; }
+                if (forceFull) textDisp_.MarkAll();
+                ovDirty = ovDirty || textOverlay_.dirtyY1 > textOverlay_.dirtyY0;
+                use = &textOverlay_;
+                show = &textDisp_;
+            } else if (wasText) {
+                ovDirty = true;
+                frame.MarkAll(); // restore the original glyph pixels on the GPU
+            }
+        }
         if (use == &ovRender_ && lastOverlay_ != &ovRender_) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
         lastOverlay_ = use;
         r->SetOverlay(use);
-        bool skip = !frame.Dirty() && !resized && !ovDirty && r->SkipIdenticalFrames();
+        bool skip = !show->Dirty() && !resized && !ovDirty && r->SkipIdenticalFrames();
         if (skip) skipped++;
         else {
         lastCw = rc.right; lastCh = rc.bottom;
@@ -313,8 +339,11 @@ void Presenter::Run() {
         gameW_ = frame.width; gameH_ = frame.height;
         LeaveCriticalSection(&vpLock_);
 
-        if (frame.Dirty()) uniqueFrames++;
-        if (!r->Present(frame, vp, rc.right, rc.bottom, opt)) {
+        if (show->Dirty()) uniqueFrames++;
+        QueryPerformanceCounter(&tC);
+        bool presOk = r->Present(*show, vp, rc.right, rc.bottom, opt);
+        QueryPerformanceCounter(&tD); tPres += tD.QuadPart - tC.QuadPart;
+        if (!presOk) {
             LOG("Renderer %s: present failed, recreating", r->Name());
             r.reset();
             r = CreateBackend();
@@ -331,6 +360,8 @@ void Presenter::Run() {
                 frames * 1000.0 / (GetTickCount() - fpsTick), uniqueFrames * 1000.0 / (GetTickCount() - fpsTick),
                 skipped * 1000.0 / (GetTickCount() - fpsTick),
                 frame.width, frame.height, vp.w, vp.h, vp.x, vp.y, backendName_);
+            if (CfgBool("Debug", "ThreadReport", false)) LOG("present: time per 5s: snapshot %.0f ms, text %.0f ms, present %.0f ms", tSnap * 1000.0 / freq.QuadPart, tText * 1000.0 / freq.QuadPart, tPres * 1000.0 / freq.QuadPart);
+            tSnap = tText = tPres = 0;
             frames = 0;
             uniqueFrames = 0;
             skipped = 0;

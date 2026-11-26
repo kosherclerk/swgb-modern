@@ -46,6 +46,9 @@ private:
     Overlay ovRender_;        // presenter-thread copy handed to the backend
     Overlay hdOverlay_;       // HD menu background composite
     bool hdActive_ = false;
+    Overlay textOverlay_;     // HD text canvas (on top of the HD menu when active)
+    Frame textDisp_;          // displayed frame with the low-res glyphs removed
+    bool textActive_ = false;
     const Overlay* lastOverlay_ = nullptr;
     Viewport vp_ = {0, 0, 800, 600};
     int gameW_ = 800, gameH_ = 600;

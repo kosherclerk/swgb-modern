@@ -5,6 +5,7 @@
 #include "audiofix.h"
 #include "crash.h"
 #include "hdmenus.h"
+#include "textlayer.h"
 
 using namespace swgbm;
 
@@ -16,6 +17,7 @@ static void Init() {
     GameExe exe = DetectExe();
     LOG("SWGB Modern ddraw loaded into %s build", ExeName(exe));
     HdMenus::Init();
+    TextLayer::Install();
     Window::InstallHooks();
     AudioFix::Install();
     Patches::Apply(exe);
