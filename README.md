@@ -17,10 +17,10 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 
 **Optional HD enhancements** (all off in the *Faithful* profile, on in *Enhanced*)
 - **HD text**: the interface text is drawn again with anti-aliased fonts at screen resolution, so it stays sharp at any scale.
-- **HD menu backgrounds**: the launcher upscales the game's own menu art once on your PC with the Real-ESRGAN x4plus model. It is shown wherever the original background is visible, so buttons and highlights keep working.
-- **HD intro videos**: the intros are upscaled the same way and played through the mod's renderer.
+- **HD menu backgrounds**: the game's own menu art upscaled 4x with the Real-ESRGAN x4plus model. It is shown wherever the original background is visible, so buttons and highlights keep working.
+- **HD intro videos**: the intros upscaled the same way and played through the mod's renderer.
 
-The launcher downloads FFmpeg and Real-ESRGAN (about 130 MB) into your user folder only when you press *Generate HD assets*. Nothing upscaled is distributed with the mod.
+The HD art is made once by the project and downloaded by the launcher as an optional pack (about 80 MB, verified by SHA-256), so nothing heavy runs on your PC. PCs without the old Indeo codec get small H.264 copies of the intros (8 MB) the same way.
 
 **Audio**
 - A DirectSound replacement on WASAPI: 32-bit float mixing at the device's native rate, band-limited **windowed-sinc resampling** of the 11/22 kHz game audio, a soft limiter, and following the Windows default device.
@@ -81,6 +81,8 @@ Requirements: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (i686 target)
 ./build.sh            # ddraw.dll + dsound.dll -> build/out
 ./package.sh 1.0.0    # launcher with embedded DLLs -> dist/SWGBModern.exe
 ```
+
+The optional asset packs are built by the maintainers with the launcher's maintainer switches (`--generate <game> menus|videos|convert <log>`, which download FFmpeg and Real-ESRGAN), then converted to JPEG (4:4:4) and H.264 and zipped. Their SHA-256 sums are pinned in `src/launcher/Core/AssetPacks.cs`.
 
 `tools/sigfind.py` locates engine patch sites in other builds of the game executable using masked byte signatures.
 

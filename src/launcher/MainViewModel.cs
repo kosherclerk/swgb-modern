@@ -205,12 +205,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void RefreshHdStatus()
     {
         if (GameDir == null) { HdStatus = ""; return; }
-        int menus = HdAssets.MenuCount(GameDir), vids = HdAssets.HdVideoCount(GameDir), srcVids = HdAssets.IntroSources(GameDir).Count();
-        var s = $"Generated: {menus} HD menu backgrounds, {vids} of {srcVids} HD intro videos.";
-        if (!HdAssets.IndeoInstalled())
-            s += HdAssets.ConvertedIntrosPresent(GameDir) ? " Intro videos converted for Windows without the Indeo codec."
-                                                         : " The Indeo codec is not installed: the intros are converted when you generate assets or press Play.";
-        if ((HdMenus && menus == 0) || (HdVideos && vids < srcVids)) s += " Press Generate to create the missing HD assets.";
+        bool hd = AssetPacks.Installed(GameDir, AssetPacks.Hd);
+        var s = hd ? "HD pack installed." : $"HD pack not downloaded ({AssetPacks.SizeText(AssetPacks.Hd)}).";
+        if (!AssetPacks.IndeoInstalled())
+            s += AssetPacks.Installed(GameDir, AssetPacks.Intros) ? " Intro videos for Windows without the Indeo codec are installed."
+                                                                  : $" The Indeo codec is missing: playable copies of the intros ({AssetPacks.SizeText(AssetPacks.Intros)}) download on Play.";
+        if (!hd && (HdMenus || HdVideos)) s += " Press Download, or Play will offer it.";
         HdStatus = s;
     }
 

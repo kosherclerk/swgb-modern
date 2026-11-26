@@ -2,7 +2,7 @@
 //
 // The menus run at 800x600 and their art exists only at that size. The
 // launcher upscales each menu background once with an AI upscaler and saves it
-// as SWGBModern\hd\menu\<crc32 of the original SLP>.png. When the game loads a
+// as SWGBModern\hd\menu\<crc32 of the original SLP>.jpg (or .png). When the game loads a
 // sprite whose CRC has an HD version, we keep the original (as palette
 // indices) and the HD image. Each frame we detect which known background is on
 // screen and composite the HD image through the overlay layer - but only where
@@ -98,10 +98,15 @@ void HdMenus::OnSlpLoaded(const void* data, size_t size) {
     if (!seen) g_checked[crc] = false;
     LeaveCriticalSection(&g_lock);
     if (seen) return;
-    wchar_t name[16];
-    swprintf(name, 16, L"%08x.png", crc);
-    std::wstring path = g_dir + name;
-    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    // the downloadable HD pack uses JPEG (the original background's own
+    // transparency mask is applied at runtime); locally made files may be PNG
+    std::wstring path;
+    for (const wchar_t* ext : {L"jpg", L"png"}) {
+        wchar_t name[20];
+        swprintf(name, 20, L"%08x.%ls", crc, ext);
+        if (GetFileAttributesW((g_dir + name).c_str()) != INVALID_FILE_ATTRIBUTES) { path = g_dir + name; break; }
+    }
+    if (path.empty()) return;
     std::vector<SlpFrame> fr;
     if (!SlpDecode((const uint8_t*)data, size, fr) || fr.empty() || fr[0].w < 320) return;
     auto bg = std::make_shared<Bg>();

@@ -53,6 +53,17 @@ public partial class App : Application
             Shutdown(code);
             return;
         }
+        // Diagnostics: SWGBModern.exe --install-pack <game dir> hd|intros <log file>
+        if (e.Args.Length == 4 && e.Args[0] == "--install-pack")
+        {
+            var logPath = e.Args[3];
+            var prog = new SyncProgress(s => { try { System.IO.File.AppendAllText(logPath, s + Environment.NewLine); } catch { } });
+            int code = 0;
+            try { Task.Run(() => Core.AssetPacks.InstallAsync(e.Args[1], e.Args[2] == "hd" ? Core.AssetPacks.Hd : Core.AssetPacks.Intros, prog, CancellationToken.None)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { prog.Report("failed: " + ex.Message); code = 1; }
+            Shutdown(code);
+            return;
+        }
         base.OnStartup(e);
     }
 }
