@@ -19,6 +19,8 @@ std::string CfgStr(const char* section, const char* key, const char* def);
 bool        CfgBool(const char* section, const char* key, bool def);
 
 void Log(const char* fmt, ...);
+// [Debug] HeapCheck: validate all process heaps, log the first failing checkpoint
+void HeapCheckpoint(const char* where);
 bool LogEnabled();
 
 // Identification of the host executable so engine patches are only applied

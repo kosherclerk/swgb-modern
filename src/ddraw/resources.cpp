@@ -22,6 +22,8 @@ typedef void*(__fastcall* ResGetFn)(uint32_t type, uint32_t id, int* allocFlag, 
 ResGetFn g_orig = nullptr;
 typedef void(__cdecl* FreeFn)(void*);
 FreeFn g_gameFree = nullptr; // the engine's own CRT free()
+typedef void*(__cdecl* MallocFn)(size_t);
+MallocFn g_gameMalloc = nullptr; // and malloc()
 int g_W = 0, g_H = 0;
 std::vector<uint32_t> g_layoutIds;
 CRITICAL_SECTION g_lock;
@@ -117,6 +119,21 @@ std::string WidenPanel(const uint8_t* data, size_t size, int W, int H) {
     return SlpEncode({n});
 }
 
+// Every load gets its own copy, allocated with the engine's own malloc() and
+// marked as allocated (allocFlag 1): the engine edits loaded data in place and
+// frees resources with its own free() when it leaves a screen. Handing it
+// memory from another heap corrupted the engine's heap when a widescreen game
+// was quit (the widened command panel sprites are freed then).
+void* Fresh(const std::string& data, int* allocFlag, int* size) {
+    char* m = g_gameMalloc ? (char*)g_gameMalloc(data.size() + 16) : nullptr;
+    if (!m) return nullptr;
+    memcpy(m, data.data(), data.size());
+    memset(m + data.size(), 0, 16);
+    *allocFlag = 1;
+    *size = (int)data.size();
+    return m;
+}
+
 void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* size) {
     void* p = g_orig(type, id, allocFlag, size);
     if (!p) return p;
@@ -130,12 +147,11 @@ void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* siz
             LOG("widescreen: panel slp %u -> %s", id, w.empty() ? "unchanged (decode failed)" : "widened");
             it = g_cache.emplace(key, w).first;
         }
+        std::string copy = it->second;
         LeaveCriticalSection(&g_lock);
-        if (it->second.empty()) return p;
+        if (copy.empty()) return p;
         if (*allocFlag == 1 && g_gameFree) g_gameFree(p);
-        *allocFlag = 0;
-        *size = (int)it->second.size();
-        return (void*)it->second.data();
+        return Fresh(copy, allocFlag, size);
     }
     if (type != 0x62696e61 /* 'bina' */) return p;
     for (uint32_t lid : g_layoutIds) {
@@ -147,22 +163,22 @@ void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* siz
             std::string src((const char*)p, (size_t)*size);
             it = g_cache.emplace(key, RewriteLayout(src, g_W, g_H)).first;
         }
+        std::string copy = it->second;
         LeaveCriticalSection(&g_lock);
         if (*allocFlag == 1 && g_gameFree) g_gameFree(p);
-        *allocFlag = 0;
-        *size = (int)it->second.size();
-        return (void*)it->second.data();
+        return Fresh(copy, allocFlag, size);
     }
     return p;
 }
 
 } // namespace
 
-bool Resources::Install(uintptr_t getter, uintptr_t gameFree, const uint8_t* prologue, size_t prologueLen, int W, int H,
+bool Resources::Install(uintptr_t getter, uintptr_t gameFree, uintptr_t gameMalloc, const uint8_t* prologue, size_t prologueLen, int W, int H,
                         std::initializer_list<uint32_t> layoutIds) {
     InitializeCriticalSection(&g_lock);
     g_W = W; g_H = H;
     g_gameFree = (FreeFn)gameFree;
+    g_gameMalloc = (MallocFn)gameMalloc;
     g_layoutIds.assign(layoutIds);
     if (!PatchCheck(getter, prologue, prologueLen)) { LOG("resources: getter prologue mismatch at %08x", (unsigned)getter); return false; }
     // trampoline: original prologue + jmp back

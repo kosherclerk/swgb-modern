@@ -64,6 +64,7 @@ struct ExeLayout {
     uintptr_t startupMode, startupResume;  // registry "Screen Size"==1280 branch
     uintptr_t enterGameRes;                // "enter game resolution" function
     uintptr_t resGetter, gameFree;         // DRS resource getter, engine CRT free()
+    uintptr_t gameMalloc;                  // engine CRT malloc()
     uintptr_t viewInterval, mapInterval;   // game screen redraw throttles
     uintptr_t worldStep;                   // world update: "cmp eax,32h" (minimum ms between updates)
     uintptr_t setPattern4, setPattern8, patternRegs; // blitter stipple pattern (fog)
@@ -72,7 +73,7 @@ struct ExeLayout {
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651780, 0x6517c0, 0x7a4060, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651780, 0x6517c0, 0x7a4060, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -86,7 +87,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64e780, 0x64e7c0, 0x7a2060, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64e780, 0x64e7c0, 0x7a2060, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -132,7 +133,7 @@ void ApplyEngine(const ExeLayout& L) {
     static const uint8_t resPrologue[] = {0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x0C};
     // The resource hook serves widescreen layouts/panels and HD menu detection.
     if (widescreen || CfgBool("Enhancements", "HDMenus", false))
-        Resources::Install(L.resGetter, L.gameFree, resPrologue, sizeof(resPrologue), widescreen ? W : 0, widescreen ? H : 0,
+        Resources::Install(L.resGetter, L.gameFree, L.gameMalloc, resPrologue, sizeof(resPrologue), widescreen ? W : 0, widescreen ? H : 0,
                            widescreen ? std::initializer_list<uint32_t>{L.layoutTableId} : std::initializer_list<uint32_t>{});
     if (!widescreen) return;
     // Registry "Screen Size" == 1280 -> custom W x H.

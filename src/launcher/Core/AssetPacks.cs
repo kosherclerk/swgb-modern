@@ -18,10 +18,10 @@ public static class AssetPacks
     public sealed record Pack(string Id, string FileName, long Size, string Sha256, string Description);
 
     public const string Repository = "kosherclerk/swgb-modern-assets";
-    public const string ReleaseTag = "assets-1";
+    public const string ReleaseTag = "assets-2";
 
-    public static readonly Pack Hd = new("hd", "swgbm-hd-pack.zip", 28343742,
-        "14846e7313b700e2b2c3614989a02b81537bc58ae699d6889eca9996ce6c5197",
+    public static readonly Pack Hd = new("hd", "swgbm-hd-pack.zip", 28566614,
+        "870774d04f519638f1590bf29722f5978acce3d3c364be60e28005038fea9a0d",
         "HD menu backgrounds and intro videos");
 
     public static readonly Pack Intros = new("intros", "swgbm-intros.zip", 4688975,
@@ -148,6 +148,13 @@ public static class AssetPacks
             var root = Path.GetFullPath(ModDir(game)) + Path.DirectorySeparatorChar;
             await Task.Run(() =>
             {
+                // the pack replaces its folders completely (older packs used other file names)
+                if (p.Id == Hd.Id)
+                    foreach (var sub in new[] { Path.Combine("hd", "menu"), Path.Combine("hd", "video") })
+                    {
+                        var dir = Path.Combine(ModDir(game), sub);
+                        if (Directory.Exists(dir)) foreach (var f in Directory.GetFiles(dir)) File.Delete(f);
+                    }
                 using var z = ZipFile.OpenRead(tmp);
                 foreach (var e in z.Entries)
                 {

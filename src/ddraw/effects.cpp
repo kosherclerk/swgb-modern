@@ -96,7 +96,10 @@ bool Effects::Compose(const Frame& in, Frame& out, bool forceFull) {
         int n = 0;
         for (int x = 0; x < W; x++) {
             if (s[x] != kMarker) continue;
-            if (!(M(px, W, H, x - 1, y - 1) || M(px, W, H, x + 1, y - 1) || M(px, W, H, x - 1, y + 1) || M(px, W, H, x + 1, y + 1))) continue;
+            // checkerboard neighbours: diagonals, or 2 pixels along the row/column
+            // (at the edge of a stippled sprite the diagonals may be outside it)
+            if (!(M(px, W, H, x - 1, y - 1) || M(px, W, H, x + 1, y - 1) || M(px, W, H, x - 1, y + 1) || M(px, W, H, x + 1, y + 1) ||
+                  M(px, W, H, x - 2, y) || M(px, W, H, x + 2, y) || M(px, W, H, x, y - 2) || M(px, W, H, x, y + 2))) continue;
             n++;
             // colour from a non-stippled 4-neighbour
             int c = -1;

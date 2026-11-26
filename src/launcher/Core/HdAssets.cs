@@ -112,8 +112,9 @@ public static class HdAssets
             .Select(n => Path.Combine(game, "Data", n)).Where(File.Exists).Select(ReadDrs).ToList();
         var all = new Dictionary<(string, int), byte[]>();
         foreach (var a in archives) foreach (var kv in a) all[kv.Key] = kv.Value;
-        var done = new HashSet<uint>();
-        var seen = new HashSet<uint>();
+        // one image per (background, palette): the same background art is shown
+        // with different palettes on different screens
+        var done = new HashSet<(uint, uint)>();
         foreach (var a in archives)
         {
             foreach (var ((ext, _), data) in a)
@@ -134,11 +135,14 @@ public static class HdAssets
                 {
                     if (!arch.TryGetValue(("slp", slpId), out var sd) || !all.TryGetValue(("bina", palId), out var pd)) continue;
                     uint crc = Crc32(sd);
-                    if (!seen.Add(crc)) continue;
+                    var palette = JascPalette(pd);
+                    var rgb = new byte[768];
+                    for (int i = 0; i < 256 && i < palette.Length; i++) { rgb[i * 3] = palette[i].R; rgb[i * 3 + 1] = palette[i].G; rgb[i * 3 + 2] = palette[i].B; }
+                    uint palCrc = Crc32(rgb);
+                    if (done.Contains((crc, palCrc))) continue;
                     var (w, h, px) = SlpFrame0(sd);
                     if (w < 320) continue;
-                    done.Add(crc);
-                    var palette = JascPalette(pd);
+                    done.Add((crc, palCrc));
                     var bgra = new byte[w * h * 4];
                     for (int i = 0; i < w * h; i++)
                     {
@@ -147,7 +151,7 @@ public static class HdAssets
                         var c = palette[v];
                         bgra[i * 4] = c.B; bgra[i * 4 + 1] = c.G; bgra[i * 4 + 2] = c.R; bgra[i * 4 + 3] = 255;
                     }
-                    SavePng(Path.Combine(outDir, $"{crc:x8}.png"), w, h, bgra);
+                    SavePng(Path.Combine(outDir, $"{crc:x8}_{palCrc:x8}.png"), w, h, bgra);
                 }
             }
         }

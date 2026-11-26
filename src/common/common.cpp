@@ -131,3 +131,20 @@ const char* ExeName(GameExe e) {
 }
 
 } // namespace swgbm
+
+namespace swgbm {
+void HeapCheckpoint(const char* where) {
+    static int enabled = -1;
+    static volatile LONG failed = 0;
+    if (enabled < 0) enabled = CfgBool("Debug", "HeapCheck", false) ? 1 : 0;
+    if (!enabled || failed) return;
+    HANDLE heaps[64];
+    DWORD n = GetProcessHeaps(64, heaps);
+    for (DWORD i = 0; i < n && i < 64; i++) {
+        if (!HeapValidate(heaps[i], 0, nullptr)) {
+            if (InterlockedExchange(&failed, 1) == 0) LOG("HEAP CORRUPT at checkpoint '%s' (heap %p, thread %lu)", where, heaps[i], GetCurrentThreadId());
+            return;
+        }
+    }
+}
+} // namespace swgbm

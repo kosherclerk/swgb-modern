@@ -159,6 +159,12 @@ private:
     }
 
     bool CreateFrameResources(int w, int h) {
+        // Nothing may still reference the old textures: unbind everything (it is
+        // all set again each frame) and submit pending work before releasing.
+        // (Releasing bound/in-flight frame textures crashed the AMD driver when
+        // the game switched from the battlefield back to the 800x600 menus.)
+        dev_->ClearState();
+        dev_->Flush();
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_);
         SafeRelease(shadeSrv_); SafeRelease(shadeTex_);
         D3D10_TEXTURE2D_DESC td = {};

@@ -26,6 +26,8 @@ namespace {
 
 struct Bg {
     uint32_t crc = 0;
+    uint32_t palCrc = 0;              // palette the HD art was made with (0 = any)
+    std::wstring path;                // HD image, decoded when first shown
     int w = 0, h = 0, x = 0, y = 0;   // original size and position (from hotspot)
     std::vector<int16_t> idx;         // original palette indices (-1 transparent)
     int hw = 0, hh = 0;               // HD size
@@ -35,7 +37,9 @@ struct Bg {
 CRITICAL_SECTION g_lock;
 bool g_enabled = false;
 std::wstring g_dir;
-std::map<uint32_t, std::shared_ptr<Bg>> g_bgs;   // crc -> background
+std::vector<std::shared_ptr<Bg>> g_bgs;          // one per (background, palette) variant
+std::vector<std::shared_ptr<Bg>> g_decoded;      // most recently shown first (HD pixels kept)
+uint32_t g_framePalCrc = 0;
 std::map<uint32_t, bool> g_checked;              // crc -> has HD file
 std::shared_ptr<Bg> g_active;
 bool g_forceFull = true;
@@ -120,36 +124,60 @@ void HdMenus::OnSlpLoaded(const void* data, size_t size) {
     if (!seen) g_checked[crc] = false;
     LeaveCriticalSection(&g_lock);
     if (seen) return;
-    // the downloadable HD pack uses WebP (the original background's own
-    // transparency mask is applied at runtime); JPEG/PNG are also accepted
-    std::wstring path;
+    // HD art files: <slp crc>_<palette crc>.webp (the same background is shown
+    // with different palettes on different screens), or <slp crc>.<ext> made
+    // before palettes were part of the name (used with any palette).
+    std::vector<std::pair<std::wstring, uint32_t>> files;
+    wchar_t pat[32];
+    swprintf(pat, 32, L"%08x_*.webp", crc);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((g_dir + pat).c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            uint32_t pc = 0;
+            if (swscanf(fd.cFileName + 9, L"%8x", &pc) == 1) files.push_back({g_dir + fd.cFileName, pc});
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
     for (const wchar_t* ext : {L"webp", L"jpg", L"png"}) {
         wchar_t name[20];
         swprintf(name, 20, L"%08x.%ls", crc, ext);
-        if (GetFileAttributesW((g_dir + name).c_str()) != INVALID_FILE_ATTRIBUTES) { path = g_dir + name; break; }
+        if (GetFileAttributesW((g_dir + name).c_str()) != INVALID_FILE_ATTRIBUTES) { files.push_back({g_dir + name, 0}); break; }
     }
-    if (path.empty()) return;
+    if (files.empty()) return;
     std::vector<SlpFrame> fr;
     if (!SlpDecode((const uint8_t*)data, size, fr) || fr.empty() || fr[0].w < 320) return;
-    auto bg = std::make_shared<Bg>();
-    bg->crc = crc;
-    bg->w = fr[0].w; bg->h = fr[0].h; bg->x = -fr[0].hx; bg->y = -fr[0].hy;
-    bg->idx = std::move(fr[0].px);
-    if (!LoadImageFile(path, bg->hw, bg->hh, bg->hd)) { LOG("hd menus: cannot read %ls", path.c_str()); return; }
     EnterCriticalSection(&g_lock);
-    g_bgs[crc] = bg;
+    for (auto& f : files) {
+        auto bg = std::make_shared<Bg>();
+        bg->crc = crc;
+        bg->palCrc = f.second;
+        bg->path = f.first;
+        bg->w = fr[0].w; bg->h = fr[0].h; bg->x = -fr[0].hx; bg->y = -fr[0].hy;
+        bg->idx = fr[0].px;
+        g_bgs.push_back(bg);
+        LOG("hd menus: background %08x (%dx%d), palette %08x", crc, bg->w, bg->h, bg->palCrc);
+    }
     g_checked[crc] = true;
     LeaveCriticalSection(&g_lock);
-    LOG("hd menus: background %08x (%dx%d) -> HD %dx%d", crc, bg->w, bg->h, bg->hw, bg->hh);
 }
 
 bool HdMenus::Compose(const Frame& f, Overlay& out) {
     if (!g_enabled) return false;
+    // palette of the frame (RGB bytes, as in the JASC files the art was made from)
+    if (f.paletteChanged || !g_framePalCrc) {
+        uint8_t rgb[768];
+        for (int i = 0; i < 256; i++) {
+            rgb[i * 3] = (uint8_t)(f.palette[i] >> 16); rgb[i * 3 + 1] = (uint8_t)(f.palette[i] >> 8); rgb[i * 3 + 2] = (uint8_t)f.palette[i];
+        }
+        uint32_t pc = Crc32(rgb, sizeof(rgb));
+        if (pc != g_framePalCrc) { g_framePalCrc = pc; g_forceFull = true; }
+    }
     EnterCriticalSection(&g_lock);
     std::vector<std::shared_ptr<Bg>> list;
-    for (auto& kv : g_bgs) list.push_back(kv.second);
+    for (auto& b : g_bgs) if (!b->palCrc || b->palCrc == g_framePalCrc) list.push_back(b);
     LeaveCriticalSection(&g_lock);
-    if (list.empty()) return false;
+    if (list.empty()) { g_active = nullptr; return false; }
 
     // Which background is on screen? Sample a grid and count exact matches.
     bool frameChanged = f.Dirty() || g_forceFull;
@@ -173,6 +201,24 @@ bool HdMenus::Compose(const Frame& f, Overlay& out) {
             if (score > bestScore) { bestScore = score; best = b; }
         }
         if (bestScore < 0.5) best = nullptr;
+    }
+    if (best && best->hd.empty()) {
+        // decode the HD image when the background is first shown; keep the
+        // three most recent ones in memory
+        if (!LoadImageFile(best->path, best->hw, best->hh, best->hd)) {
+            LOG("hd menus: cannot read %ls", best->path.c_str());
+            EnterCriticalSection(&g_lock);
+            g_bgs.erase(std::remove(g_bgs.begin(), g_bgs.end(), best), g_bgs.end());
+            LeaveCriticalSection(&g_lock);
+            best = nullptr;
+        } else {
+            LOG("hd menus: showing %ls (%dx%d)", best->path.c_str(), best->hw, best->hh);
+        }
+    }
+    if (best) {
+        g_decoded.erase(std::remove(g_decoded.begin(), g_decoded.end(), best), g_decoded.end());
+        g_decoded.insert(g_decoded.begin(), best);
+        while (g_decoded.size() > 3) { auto old = g_decoded.back(); g_decoded.pop_back(); old->hd.clear(); old->hd.shrink_to_fit(); }
     }
     if (best != g_active) { g_active = best; g_forceFull = true; g_mask.clear(); }
     if (!g_active) { g_forceFull = true; return false; }
