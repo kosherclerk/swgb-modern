@@ -6,29 +6,51 @@ using System.Security.Cryptography;
 namespace SWGBModern.Core;
 
 /// <summary>
-/// Optional content made once by the maintainers and served from the project's
-/// GitHub release "assets-1": AI-upscaled menu backgrounds and intro videos, and
-/// H.264 copies of the intros for PCs without the Indeo codec. Each pack is
-/// verified by SHA-256 and extracted into Game\SWGBModern.
+/// Optional content made once by the maintainers and served from the GitHub
+/// release "assets-1" of the assets repository: AI-upscaled menu backgrounds
+/// (WebP) and intro videos (H.264), and H.264 copies of the intros for PCs
+/// without the Indeo codec. Each pack is verified by SHA-256 and extracted into
+/// Game\SWGBModern. The assets repository is private for now; downloads then need
+/// a GitHub token with access to it in SWGBM_GITHUB_TOKEN.
 /// </summary>
 public static class AssetPacks
 {
     public sealed record Pack(string Id, string FileName, long Size, string Sha256, string Description);
 
+    public const string Repository = "kosherclerk/swgb-modern-assets";
     public const string ReleaseTag = "assets-1";
 
-    public static readonly Pack Hd = new("hd", "swgbm-hd-pack.zip", 80570147,
-        "b3f2c73a946b7e38a3b011303bcc249b7f077b475a66b7728d9277de75fcc62d",
+    public static readonly Pack Hd = new("hd", "swgbm-hd-pack.zip", 28343742,
+        "14846e7313b700e2b2c3614989a02b81537bc58ae699d6889eca9996ce6c5197",
         "HD menu backgrounds and intro videos");
 
-    public static readonly Pack Intros = new("intros", "swgbm-intros.zip", 8374451,
-        "0a4320bf95ce2bb35b9a1c6fa52c55d7c97e0c7bc8abbc1ad9ea25cfeac28a76",
+    public static readonly Pack Intros = new("intros", "swgbm-intros.zip", 4688975,
+        "9c2e2c06fa8aaca6c35da784f6fae92d2db610dc6922b3c673e36e29c117cb43",
         "intro videos without the Indeo codec");
 
     // SWGBM_ASSETS_BASE overrides the download location (testing a pack before it is published)
     public static string Url(Pack p) =>
         (Environment.GetEnvironmentVariable("SWGBM_ASSETS_BASE") is { Length: > 0 } b ? b.TrimEnd('/')
-            : $"https://github.com/{Updater.Repository}/releases/download/{ReleaseTag}") + "/" + p.FileName;
+            : $"https://github.com/{Repository}/releases/download/{ReleaseTag}") + "/" + p.FileName;
+
+    private static string? Token => Environment.GetEnvironmentVariable("SWGBM_GITHUB_TOKEN") is { Length: > 0 } t ? t : null;
+
+    /// <summary>Private repository: resolve the asset through the API with the token.</summary>
+    private static async Task<HttpRequestMessage> Request(HttpClient http, Pack p, CancellationToken ct)
+    {
+        if (Token is not { } token || Environment.GetEnvironmentVariable("SWGBM_ASSETS_BASE") is { Length: > 0 })
+            return new HttpRequestMessage(HttpMethod.Get, Url(p));
+        using var rel = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/tags/{ReleaseTag}");
+        rel.Headers.Authorization = new("Bearer", token);
+        using var r = await http.SendAsync(rel, ct);
+        r.EnsureSuccessStatusCode();
+        using var doc = System.Text.Json.JsonDocument.Parse(await r.Content.ReadAsStringAsync(ct));
+        var asset = doc.RootElement.GetProperty("assets").EnumerateArray().First(a => a.GetProperty("name").GetString() == p.FileName);
+        var req = new HttpRequestMessage(HttpMethod.Get, asset.GetProperty("url").GetString());
+        req.Headers.Authorization = new("Bearer", token);
+        req.Headers.Accept.ParseAdd("application/octet-stream");
+        return req;
+    }
     public static string SizeText(Pack p) => $"{p.Size / 1048576.0:0} MB";
 
     private static string ModDir(string game) => Path.Combine(game, "SWGBModern");
@@ -41,7 +63,7 @@ public static class AssetPacks
     public static int MenuCount(string game)
     {
         var d = Path.Combine(ModDir(game), "hd", "menu");
-        return Directory.Exists(d) ? Directory.GetFiles(d).Count(f => f.EndsWith(".jpg") || f.EndsWith(".png")) : 0;
+        return Directory.Exists(d) ? Directory.GetFiles(d).Count(f => f.EndsWith(".webp") || f.EndsWith(".jpg") || f.EndsWith(".png")) : 0;
     }
 
     public static async Task InstallAsync(string game, Pack p, IProgress<string> log, CancellationToken ct)
@@ -52,7 +74,10 @@ public static class AssetPacks
             using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) })
             {
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("SWGBModern-Launcher");
-                using var resp = await http.GetAsync(Url(p), HttpCompletionOption.ResponseHeadersRead, ct);
+                using var req = await Request(http, p, ct);
+                using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    throw new InvalidOperationException("this download is not publicly available yet.");
                 resp.EnsureSuccessStatusCode();
                 long total = resp.Content.Headers.ContentLength ?? p.Size, done = 0;
                 await using var src = await resp.Content.ReadAsStreamAsync(ct);

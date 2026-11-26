@@ -90,7 +90,7 @@
               <Button Content="Download HD pack" Click="DownloadHd_Click" IsEnabled="{Binding NotGenerating}"/>
               <Button Content="Cancel" Click="CancelHd_Click" Visibility="{Binding Generating, Converter={StaticResource Vis}}"/>
             </StackPanel>
-            <TextBlock Style="{StaticResource Hint}" Text="The HD pack (about 80 MB) is made once by the SWGB Modern project with the Real-ESRGAN x4plus upscaler and downloaded from the project's GitHub release. It is checked against a fixed checksum and installed into Game\SWGBModern; Uninstall removes it."/>
+            <TextBlock Style="{StaticResource Hint}" Text="The HD pack (about 28 MB) is made once by the SWGB Modern project with the Real-ESRGAN x4plus upscaler and downloaded from the project's GitHub release. It is checked against a fixed checksum and installed into Game\SWGBModern; Uninstall removes it."/>
             <TextBlock Style="{StaticResource Hint}" Text="{Binding HdStatus}"/>
           </StackPanel>
         </ScrollViewer>

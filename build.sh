@@ -17,8 +17,21 @@ else
   echo "Vulkan SDK not found: building without the Vulkan backend"
   DDRAW_SRC="$(echo $DDRAW_SRC | sed 's#src/ddraw/backends/vulkan.cpp##') src/ddraw/backends/novulkan.cpp"
 fi
+# libwebp decoder (third_party/libwebp, BSD) for the HD pack's WebP images.
+# Built once into build/obj/webp; Windows' own WebP codec is missing on some systems.
+CC="$LLVM/bin/i686-w64-mingw32-clang"
+mkdir -p build/obj/webp
+WEBP_OBJS=""
+for c in $(find third_party/libwebp/src -name '*.c' | sort); do
+  o=build/obj/webp/$(echo "$c" | sed 's#third_party/libwebp/src/##; s#/#_#g; s#\.c$#.o#')
+  if [ ! -f "$o" ] || [ "$c" -nt "$o" ]; then
+    $CC -O2 -msse2 -DNDEBUG -DWEBP_DISABLE_STATS -Ithird_party/libwebp -c "$c" -o "$o"
+  fi
+  WEBP_OBJS="$WEBP_OBJS $o"
+done
+CXXFLAGS="$CXXFLAGS -Ithird_party/libwebp/src"
 echo "== ddraw.dll"
-$CXX $CXXFLAGS $DDRAW_SRC src/ddraw/ddraw.def -o $OUT/ddraw.dll $LDFLAGS -lgdi32 -luser32 -lole32 -luuid -ldxguid -lwinmm -ldwmapi -ldxguid -lopengl32 -lpsapi -lvfw32 -lmfuuid -lwindowscodecs
+$CXX $CXXFLAGS $DDRAW_SRC $WEBP_OBJS src/ddraw/ddraw.def -o $OUT/ddraw.dll $LDFLAGS -lgdi32 -luser32 -lole32 -luuid -ldxguid -lwinmm -ldwmapi -ldxguid -lopengl32 -lpsapi -lvfw32 -lmfuuid -lwindowscodecs
 if [ -d src/dsound ] && ls src/dsound/*.cpp >/dev/null 2>&1; then
   echo "== dsound.dll"
   $CXX $CXXFLAGS src/common/common.cpp src/dsound/*.cpp src/dsound/dsound.def -o $OUT/dsound.dll $LDFLAGS -lole32 -luuid -lwinmm -lavrt -lksuser -ldxguid -luuid

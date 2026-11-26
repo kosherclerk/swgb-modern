@@ -12,6 +12,7 @@
 #include "hdmenus.h"
 #include "slp.h"
 #include <wincodec.h>
+#include <webp/decode.h>
 #include <vector>
 #include <map>
 #include <memory>
@@ -81,6 +82,27 @@ bool LoadPng(const std::wstring& path, int& w, int& h, std::vector<uint32_t>& ou
     return ok;
 }
 
+// WebP (the HD pack's format) with the bundled libwebp: Windows' own WebP
+// codec is an optional component and missing on N editions.
+bool LoadWebp(const std::wstring& path, int& w, int& h, std::vector<uint32_t>& out) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    GetFileSizeEx(f, &sz);
+    std::vector<uint8_t> data((size_t)sz.QuadPart);
+    DWORD got = 0;
+    bool ok = sz.QuadPart > 0 && sz.QuadPart < (1 << 30) && ReadFile(f, data.data(), (DWORD)data.size(), &got, nullptr) && got == data.size();
+    CloseHandle(f);
+    if (!ok || !WebPGetInfo(data.data(), data.size(), &w, &h) || w <= 0 || h <= 0) return false;
+    out.resize((size_t)w * h);
+    return WebPDecodeBGRAInto(data.data(), data.size(), (uint8_t*)out.data(), out.size() * 4, w * 4) != nullptr;
+}
+
+bool LoadImageFile(const std::wstring& path, int& w, int& h, std::vector<uint32_t>& out) {
+    if (path.size() > 5 && _wcsicmp(path.c_str() + path.size() - 5, L".webp") == 0) return LoadWebp(path, w, h, out);
+    return LoadPng(path, w, h, out);
+}
+
 } // namespace
 
 void HdMenus::Init() {
@@ -98,10 +120,10 @@ void HdMenus::OnSlpLoaded(const void* data, size_t size) {
     if (!seen) g_checked[crc] = false;
     LeaveCriticalSection(&g_lock);
     if (seen) return;
-    // the downloadable HD pack uses JPEG (the original background's own
-    // transparency mask is applied at runtime); locally made files may be PNG
+    // the downloadable HD pack uses WebP (the original background's own
+    // transparency mask is applied at runtime); JPEG/PNG are also accepted
     std::wstring path;
-    for (const wchar_t* ext : {L"jpg", L"png"}) {
+    for (const wchar_t* ext : {L"webp", L"jpg", L"png"}) {
         wchar_t name[20];
         swprintf(name, 20, L"%08x.%ls", crc, ext);
         if (GetFileAttributesW((g_dir + name).c_str()) != INVALID_FILE_ATTRIBUTES) { path = g_dir + name; break; }
@@ -113,7 +135,7 @@ void HdMenus::OnSlpLoaded(const void* data, size_t size) {
     bg->crc = crc;
     bg->w = fr[0].w; bg->h = fr[0].h; bg->x = -fr[0].hx; bg->y = -fr[0].hy;
     bg->idx = std::move(fr[0].px);
-    if (!LoadPng(path, bg->hw, bg->hh, bg->hd)) { LOG("hd menus: cannot read %ls", path.c_str()); return; }
+    if (!LoadImageFile(path, bg->hw, bg->hh, bg->hd)) { LOG("hd menus: cannot read %ls", path.c_str()); return; }
     EnterCriticalSection(&g_lock);
     g_bgs[crc] = bg;
     g_checked[crc] = true;

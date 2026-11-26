@@ -20,7 +20,7 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 - **HD menu backgrounds**: the game's own menu art upscaled 4x with the Real-ESRGAN x4plus model. It is shown wherever the original background is visible, so buttons and highlights keep working.
 - **HD intro videos**: the intros upscaled the same way and played through the mod's renderer.
 
-The HD art is made once by the project and downloaded by the launcher as an optional pack (about 80 MB, verified by SHA-256), so nothing heavy runs on your PC. PCs without the old Indeo codec get small H.264 copies of the intros (8 MB) the same way.
+The HD art is made once by the project and downloaded by the launcher as an optional pack (about 28 MB, verified by SHA-256), so nothing heavy runs on your PC. PCs without the old Indeo codec get small H.264 copies of the intros (5 MB) the same way.
 
 **Audio**
 - A DirectSound replacement on WASAPI: 32-bit float mixing at the device's native rate, band-limited **windowed-sinc resampling** of the 11/22 kHz game audio, a soft limiter, and following the Windows default device.
@@ -82,10 +82,14 @@ Requirements: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (i686 target)
 ./package.sh 1.0.0    # launcher with embedded DLLs -> dist/SWGBModern.exe
 ```
 
-The optional asset packs are built by the maintainers with the launcher's maintainer switches (`--generate <game> menus|videos|convert <log>`, which download FFmpeg and Real-ESRGAN), then converted to JPEG (4:4:4) and H.264 and zipped. Their SHA-256 sums are pinned in `src/launcher/Core/AssetPacks.cs`.
+The optional asset packs are built by the maintainers with the launcher's maintainer switches (`--generate <game> menus|videos|convert <log>`, which download FFmpeg and Real-ESRGAN), then converted (menus: WebP quality 80 at 2880x2160, decoded by the bundled libwebp; videos: H.264 CRF 26, x264 veryslow) and zipped. The packs live in the `kosherclerk/swgb-modern-assets` release `assets-1`; while that repository is private, set `SWGBM_GITHUB_TOKEN` to download. Their SHA-256 sums are pinned in `src/launcher/Core/AssetPacks.cs`.
 
 `tools/sigfind.py` locates engine patch sites in other builds of the game executable using masked byte signatures.
 
 ## License
 
 MIT, see [LICENSE](LICENSE). The xBR filter is an independent implementation of Hyllian's algorithm (MIT).
+
+## Third-party code
+
+- `third_party/libwebp`: decoder subset of [libwebp](https://github.com/webmproject/libwebp) 1.6.0, BSD-3-Clause (see its `COPYING`).
