@@ -112,11 +112,36 @@ void ApplyCursorClip() {
     }
 }
 
+// [Display] Monitor: device name of the monitor to run on (e.g. \.\DISPLAY2,
+// as listed by the launcher); empty or not connected = the primary monitor.
+struct MonitorSearch { wchar_t name[64]; HMONITOR found; };
+BOOL CALLBACK MonitorByName(HMONITOR m, HDC, LPRECT, LPARAM p) {
+    auto* c = (MonitorSearch*)p;
+    MONITORINFOEXW mi;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(m, (MONITORINFO*)&mi) && _wcsicmp(mi.szDevice, c->name) == 0) { c->found = m; return FALSE; }
+    return TRUE;
+}
+
+HMONITOR ChosenMonitor() {
+    std::string want = CfgStr("Display", "Monitor", "");
+    if (!want.empty()) {
+        MonitorSearch ctx = {};
+        MultiByteToWideChar(CP_UTF8, 0, want.c_str(), -1, ctx.name, 64);
+        EnumDisplayMonitors(nullptr, nullptr, MonitorByName, (LPARAM)&ctx);
+        if (ctx.found) return ctx.found;
+        static bool warned = false;
+        if (!warned) { warned = true; LOG("monitor %s not connected - using the primary monitor", want.c_str()); }
+    }
+    return MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+}
+
 void ApplyWindowMode() {
     if (!g_hwnd) return;
-    HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY);
+    HMONITOR mon = ChosenMonitor();
     MONITORINFO mi = {sizeof(mi)};
     GetMonitorInfoW(mon, &mi);
+    { static RECT last = {}; if (memcmp(&last, &mi.rcMonitor, sizeof(RECT))) { last = mi.rcMonitor; LOG("window: on monitor %ld,%ld %ldx%ld (%s)", mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, g_windowed ? "windowed" : "borderless"); } }
     if (!g_windowed) {
         SetWindowLongW(g_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
         SetWindowLongW(g_hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW);

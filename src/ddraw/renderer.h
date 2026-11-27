@@ -10,7 +10,9 @@
 
 namespace swgbm {
 
-enum class Filter { Nearest = 0, Sharp = 1, Bilinear = 2 };
+// PixelArt (internal, mouse-wheel zoom): crisp texels with 1-pixel
+// anti-aliased edges at any non-integer scale; bilinear below 1x.
+enum class Filter { Nearest = 0, Sharp = 1, Bilinear = 2, PixelArt = 3 };
 enum class ScaleMode { Aspect = 0, Integer = 1, Stretch = 2 };
 
 struct Viewport { int x, y, w, h; };

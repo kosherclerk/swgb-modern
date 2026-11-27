@@ -96,11 +96,14 @@
             <TextBlock Style="{StaticResource Section}" Text="RENDERER"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+              <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
               <TextBlock Style="{StaticResource Label}" Text="Graphics API"/>
               <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding Renderers}" SelectedValue="{Binding Renderer}"/>
               <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Window"/>
               <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding Modes}" SelectedValue="{Binding Mode}"/>
+              <TextBlock Grid.Row="2" Style="{StaticResource Label}" Text="Monitor" Visibility="{Binding MultiMonitor, Converter={StaticResource Vis}}"/>
+              <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding Monitors}" SelectedValue="{Binding Monitor}"
+                        Visibility="{Binding MultiMonitor, Converter={StaticResource Vis}}"/>
             </Grid>
             <TextBlock Style="{StaticResource Hint}" Text="Automatic picks Direct3D 11 and falls back to OpenGL, D3D12, Vulkan, D3D10 and finally Software. Alt+Enter switches between windowed and borderless while playing. A renderer change applies the next time the game starts; filter, scaling, window mode, VSync and frame limit apply immediately when you press Save."/>
 
@@ -132,10 +135,17 @@
               <ComboBox Grid.Row="4" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding PanelStyles}" SelectedValue="{Binding PanelStyle}"/>
             </Grid>
             <TextBlock Style="{StaticResource Hint}" Text="{Binding ResolutionSummary}"/>
-            <Grid Margin="0,4,0,0">
+            <TextBlock Style="{StaticResource Section}" Text="MOUSE-WHEEL ZOOM"/>
+            <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <TextBlock Style="{StaticResource Label}" Text="Mouse-wheel zoom"/>
+              <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+              <TextBlock Style="{StaticResource Label}" Text="Zoom out"/>
               <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ZoomChoices}" SelectedValue="{Binding ZoomOut}"/>
+              <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Zoom in" Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
+              <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ZoomInChoices}" SelectedValue="{Binding ZoomIn}"
+                        Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
+              <CheckBox Grid.Row="2" Grid.Column="1" Content="Stop at 100% when zooming through it" IsChecked="{Binding ZoomSnap}"
+                        Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
             </Grid>
             <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Text="Zoom the battlefield with the mouse wheel, like newer RTS games (widescreen only). Zooming out shows more of the map; the game then draws a larger battlefield, which costs more CPU. The original sprites are only scaled, not redrawn."/>
 

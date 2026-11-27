@@ -306,6 +306,7 @@ void Presenter::Run() {
         // and the panel are drawn as two regions (see zoom.h)
         const bool zoomed = Zoom::On() && frame.width == Zoom::InternalW() && frame.height == Zoom::InternalH();
         const bool zoomMoving = zoomed && Zoom::Animate();
+        if (zoomMoving) SetEvent(frameEvent_);   // keep presenting until the zoom settles
         bool skip = !show->Dirty() && !resized && !ovDirty && !zoomMoving && r->SkipIdenticalFrames();
         if (skip) skipped++;
         else {
@@ -313,22 +314,7 @@ void Presenter::Run() {
         Viewport vp = zoomed ? ComputeViewport(rc.right, rc.bottom, Zoom::DisplayW(), Zoom::DisplayH())
                              : ComputeViewport(rc.right, rc.bottom, frame.width, frame.height);
         opt.regions.clear();
-        if (zoomed && vp.w > 0 && vp.h > 0) {
-            const float s = (float)vp.h / Zoom::DisplayH();
-            const int split = vp.y + (int)((Zoom::DisplayH() - Zoom::PanelH()) * s + 0.5f);
-            float bx, by, bw, bh;
-            Zoom::BattlefieldSource(bx, by, bw, bh);
-            Region field, panel;
-            field.x = vp.x; field.y = vp.y; field.w = vp.w; field.h = split - vp.y;
-            field.u0 = bx / frame.width; field.v0 = by / frame.height;
-            field.u1 = (bx + bw) / frame.width; field.v1 = (by + bh) / frame.height;
-            field.filter = Zoom::Current() == 1.0f ? opt.filter : Filter::Bilinear;
-            panel.x = vp.x; panel.y = split; panel.w = vp.w; panel.h = vp.y + vp.h - split;
-            panel.u0 = 0; panel.v0 = (float)(frame.height - Zoom::PanelH()) / frame.height;
-            panel.u1 = (float)Zoom::DisplayW() / frame.width; panel.v1 = 1;
-            panel.filter = opt.filter;
-            opt.regions = {field, panel};
-        }
+        if (zoomed) Zoom::Regions(vp, frame.width, frame.height, opt.filter, opt.regions);
         EnterCriticalSection(&vpLock_);
         vp_ = vp;
         gameW_ = frame.width; gameH_ = frame.height;

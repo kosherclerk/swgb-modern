@@ -57,6 +57,14 @@ float4 PSScale(VSOut i) : SV_Target {
     float2 uv = uvRect.xy + i.uv * uvRect.zw;
     if (filterMode == 0) return float4(Px(floor(uv * srcSize.xy)), 1);
     if (filterMode == 2) return float4(FrameTex.SampleLevel(LinearSamp, uv, 0).rgb, 1);
+    if (filterMode == 3) {   // pixel art: true scale, 1-pixel AA edges
+        float2 tx = uv * srcSize.xy;
+        float2 sc = dstSize.xy / (srcSize.xy * uvRect.zw);
+        float2 r = max(0.5 - 0.5 / max(sc, 1.0), 0.0);
+        float2 d = frac(tx) - 0.5;
+        float2 g = (d - clamp(d, -r, r)) / max(1.0 - 2.0 * r, 1e-4) + 0.5;
+        return float4(FrameTex.SampleLevel(LinearSamp, (floor(tx) + g) * srcSize.zw, 0).rgb, 1);
+    }
     // sharp bilinear
     float2 texel = uv * srcSize.xy;
     float2 scale = max(floor(dstSize.xy / (srcSize.xy * uvRect.zw) + 0.001), 1.0);   // + epsilon: GPU division is approximate
@@ -152,6 +160,15 @@ void main() {
     vec2 uv = uvRect.xy + vUV * uvRect.zw;
     if (filterMode == 0) { outColor = vec4(Px(floor(uv * srcSize.xy)), 1.0); return; }
     if (filterMode == 2) { outColor = vec4(Lin(uv), 1.0); return; }
+    if (filterMode == 3) {   // pixel art: true scale, 1-pixel AA edges
+        vec2 tx = uv * srcSize.xy;
+        vec2 sc = dstSize.xy / (srcSize.xy * uvRect.zw);
+        vec2 r = max(0.5 - 0.5 / max(sc, vec2(1.0)), vec2(0.0));
+        vec2 d = fract(tx) - 0.5;
+        vec2 g = (d - clamp(d, -r, r)) / max(1.0 - 2.0 * r, vec2(1e-4)) + 0.5;
+        outColor = vec4(Lin((floor(tx) + g) * srcSize.zw), 1.0);
+        return;
+    }
     vec2 texel = uv * srcSize.xy;
     vec2 scale = max(floor(dstSize.xy / (srcSize.xy * uvRect.zw) + 0.001), vec2(1.0));
     vec2 fl = floor(texel);

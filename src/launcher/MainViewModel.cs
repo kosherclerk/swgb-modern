@@ -79,8 +79,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         new("auto", "Widescreen: native resolution + scale"), new("custom", "Widescreen: custom size"), new("classic", "Original 4:3 modes (as the game shipped)"),
     };
-    public List<Choice> NativeModes { get; } = SystemInfo.MonitorModes().Select(m => new Choice($"{m.W}x{m.H}", $"{m.W} x {m.H}"))
-        .Append(new Choice("custom", "Other...")).ToList();
+    public ObservableCollection<Choice> NativeModes { get; } = new();
+    private void RebuildNativeModes()
+    {
+        NativeModes.Clear();
+        foreach (var m in SystemInfo.MonitorModes()) NativeModes.Add(new Choice($"{m.W}x{m.H}", $"{m.W} x {m.H}"));
+        NativeModes.Add(new Choice("custom", "Other..."));
+    }
+    public List<Choice> Monitors { get; } = SystemInfo.Monitors()
+        .Select(m => new Choice(m.Primary ? "" : m.Device, $"{(m.Primary ? "Primary - " : "")}Monitor {m.Number}: {m.W} x {m.H} @ {m.Hz} Hz")).ToList();
+    public bool MultiMonitor => Monitors.Count > 1;
+    private string _monitor = "";
+    public string Monitor
+    {
+        get => _monitor;
+        set
+        {
+            if (!Set(ref _monitor, value ?? "")) return;
+            SystemInfo.TargetDevice = string.IsNullOrEmpty(_monitor) ? null : _monitor;
+            RebuildNativeModes();
+            var (mw, mh, _) = SystemInfo.PrimaryMonitor();
+            NativeRes = $"{mw}x{mh}";
+            RebuildScales();
+            On(nameof(ResolutionSummary));
+        }
+    }
+    public List<Choice> ZoomInChoices { get; } = new() { new("100", "No zoom in"), new("125", "Up to 125%"), new("150", "Up to 150%"), new("200", "Up to 200%") };
+    private string _zoomIn = "125";
+    public string ZoomIn { get => _zoomIn; set => Set(ref _zoomIn, value); }
+    private bool _zoomSnap = true;
+    public bool ZoomSnap { get => _zoomSnap; set => Set(ref _zoomSnap, value); }
+    public bool ZoomEnabled => ZoomOut != "off";
     public ObservableCollection<SystemInfo.ScaleOption> ScaleChoices { get; } = new();
     public List<Choice> PanelStyles { get; } = new() { new("stretch", "Stretched (wide info panel)"), new("center", "Centred original panel") };
     public List<Choice> Resamplers { get; } = new() { new("sinc", "Windowed sinc (best)"), new("cubic", "Cubic"), new("linear", "Linear (classic)") };
@@ -145,7 +174,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string PanelStyle { get => _panelStyle; set => Set(ref _panelStyle, value); }
     public List<Choice> ZoomChoices { get; } = new() { new("off", "Off"), new("85", "Up to 85% (zoom out a little)"), new("70", "Up to 70%"), new("60", "Up to 60% (most map, most CPU)") };
     private string _zoomOut = "off";
-    public string ZoomOut { get => _zoomOut; set => Set(ref _zoomOut, value); }
+    public string ZoomOut { get => _zoomOut; set { if (Set(ref _zoomOut, value)) On(nameof(ZoomEnabled)); } }
 
     public (int W, int H) EffectiveResolution()
     {
@@ -232,6 +261,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public MainViewModel()
     {
         GameDir = GameLocator.Find(Prefs.GameDir);
+        RebuildNativeModes();
         ResolutionMode = Prefs.ResolutionMode;
         var (cw, ch, _) = SystemInfo.PrimaryMonitor();
         if (Prefs.NativeW > 0 && Prefs.NativeH > 0)
@@ -263,6 +293,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CustomHeight = ini.GetInt("Display", "GameHeight", 1080);
         PanelStyle = Pick(PanelStyles, ini.GetString("Widescreen", "PanelStyle", "stretch"), "stretch");
         ZoomOut = ini.GetBool("Zoom", "Enabled", false) ? Pick(ZoomChoices, ini.GetString("Zoom", "MaxOut", "70"), "70") : "off";
+        ZoomIn = Pick(ZoomInChoices, ini.GetString("Zoom", "MaxIn", "125"), "125");
+        ZoomSnap = ini.GetBool("Zoom", "SnapAt100", true);
+        var mon = ini.GetString("Display", "Monitor", "");
+        Monitor = Monitors.Any(m => m.Value == mon) ? mon : "";
         GameFps = ini.GetInt("Fixes", "GameFPS", 60);
         MinimapMs = ini.GetInt("Fixes", "MinimapRefreshMs", 100);
         IdleCpu = ini.GetBool("Fixes", "IdleCPU", true);
@@ -325,6 +359,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Widescreen", "PanelStyle", PanelStyle);
         ini.Set("Zoom", "Enabled", ZoomOut != "off");
         if (ZoomOut != "off") ini.Set("Zoom", "MaxOut", ZoomOut);
+        ini.Set("Zoom", "MaxIn", ZoomIn);
+        ini.Set("Zoom", "SnapAt100", ZoomSnap);
+        ini.Set("Display", "Monitor", Monitor);
         ini.Set("Fixes", "GameFPS", GameFps);
         ini.Set("Fixes", "MinimapRefreshMs", MinimapMs);
         ini.Set("Fixes", "IdleCPU", IdleCpu);

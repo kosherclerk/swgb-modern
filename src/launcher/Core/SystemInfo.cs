@@ -6,6 +6,42 @@ namespace SWGBModern.Core;
 public static class SystemInfo
 {
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    private delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data);
+    [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(IntPtr monitor, ref MONITORINFOEX mi);
+
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor, rcWork;
+        public int dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    public sealed record Monitor(string Device, int W, int H, int Hz, bool Primary, int Number);
+
+    /// <summary>Connected monitors (physical resolution), primary first.</summary>
+    public static List<Monitor> Monitors()
+    {
+        var list = new List<Monitor>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (m, _, _, _) =>
+        {
+            var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+            if (!GetMonitorInfoW(m, ref mi)) return true;
+            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+            int w = mi.rcMonitor.Right - mi.rcMonitor.Left, h = mi.rcMonitor.Bottom - mi.rcMonitor.Top, hz = 60;
+            if (EnumDisplaySettingsW(mi.szDevice, -1, ref dm) && dm.dmPelsWidth > 0) { w = dm.dmPelsWidth; h = dm.dmPelsHeight; hz = dm.dmDisplayFrequency; }
+            int num = int.TryParse(new string(mi.szDevice.Where(char.IsDigit).ToArray()), out var n) ? n : list.Count + 1;
+            list.Add(new Monitor(mi.szDevice, w, h, hz, (mi.dwFlags & 1) != 0, num));
+            return true;
+        }, IntPtr.Zero);
+        return list.OrderByDescending(m => m.Primary).ThenBy(m => m.Number).ToList();
+    }
+
+    /// <summary>The monitor the game runs on (device name; null = primary).</summary>
+    public static string? TargetDevice { get; set; }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumDisplaySettingsW(string? device, int mode, ref DEVMODE dm);
 
@@ -22,11 +58,11 @@ public static class SystemInfo
         public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
     }
 
-    /// <summary>Physical resolution and refresh rate of the primary monitor.</summary>
+    /// <summary>Physical resolution and refresh rate of the game's monitor (TargetDevice, else the primary).</summary>
     public static (int Width, int Height, int Hz) PrimaryMonitor()
     {
         var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        if (EnumDisplaySettingsW(null, -1 /*ENUM_CURRENT_SETTINGS*/, ref dm) && dm.dmPelsWidth > 0)
+        if (EnumDisplaySettingsW(TargetDevice, -1 /*ENUM_CURRENT_SETTINGS*/, ref dm) && dm.dmPelsWidth > 0)
             return (dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
         return (GetSystemMetrics(0), GetSystemMetrics(1), 60);
     }
@@ -36,7 +72,7 @@ public static class SystemInfo
     {
         var set = new HashSet<(int, int)>();
         var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        for (int i = 0; EnumDisplaySettingsW(null, i, ref dm); i++)
+        for (int i = 0; EnumDisplaySettingsW(TargetDevice, i, ref dm); i++)
             if (dm.dmPelsWidth >= 1280 && dm.dmPelsHeight >= 720) set.Add((dm.dmPelsWidth, dm.dmPelsHeight));
         var (cw, ch, _) = PrimaryMonitor();
         set.Add((cw, ch));
