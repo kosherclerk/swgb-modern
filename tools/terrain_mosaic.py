@@ -2,14 +2,16 @@
 Assembles an n x n terrain SLP (97x49 isometric tiles) into one isometric mosaic
 with the in-game palette 50500. SWGB layout: order cr, axis up (tile (i,j) uses
 frame j*n+i; map axis i runs up-right). repeat=3 gives wrap-around context for
-upscaling the texture as one seamless image."""
+upscaling the texture as one seamless image.
+The game folder is SWGB_GAME, else the "Game" folder next to the repository."""
 import os, struct, sys, math
-sys.path.insert(0, r'C:\Users\user\Desktop\claude\swgb\ModSource\tools')
-src = open(r'C:\Users\user\Desktop\claude\swgb\ModSource\tools\hd_menus_proto.py').read().replace('\nmain()\n', '\n')
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+src = open(os.path.join(HERE, 'hd_menus_proto.py')).read().replace('\nmain()\n', '\n')
 ns = {'__file__': 'x'}
 exec(compile(src, 'proto', 'exec'), ns)
 drs, slp_frame0, palette = ns['drs'], ns['slp_frame0'], ns['palette']
-G = r'C:\Users\user\Desktop\claude\swgb\Game\Data'
+G = os.path.join(os.environ.get('SWGB_GAME') or os.path.join(HERE, '..', '..', 'Game'), 'Data')
 rid, order, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 axis = sys.argv[4] if len(sys.argv) > 4 else 'down'
 rep = int(sys.argv[5]) if len(sys.argv) > 5 else 1

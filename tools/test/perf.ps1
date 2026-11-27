@@ -11,7 +11,7 @@
 #                              skip the intro videos, focus the window first
 #   -OkX/-OkY                  screen position of the Objectives OK button
 #                              (default: 1920x1080 game; 800x600 game: 2599,1810)
-param([string]$Game = 'C:\Users\user\Desktop\claude\swgb\Game', [string]$Renderer = 'd3d11',
+param([string]$Game = $(if ($env:SWGB_GAME) { $env:SWGB_GAME } else { Join-Path $PSScriptRoot '..\..\..\Game' }), [string]$Renderer = 'd3d11',
       [int]$Fog = 1, [int]$Text = 1, [int]$Runs = 1, [string]$Tag = 'perf', [int]$Seconds = 10,
       [string]$Set = '', [switch]$Other, [int]$OkX = 2297, [int]$OkY = 1486)
 $i = "$env:TEMP\inp.exe"; $ini = "$Game\SWGBModern.ini"
