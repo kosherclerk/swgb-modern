@@ -210,7 +210,7 @@ public partial class MainWindow : Window
         catch (Exception ex) { _vm.Status = "Could not load the versions."; Error("Could not load the list of versions", ex); return; }
         if (all.Count == 0) { MessageBox.Show(this, "No versions found.", "SWGB Modern"); return; }
 
-        var list = new System.Windows.Controls.ListBox { Height = 260, Margin = new Thickness(0, 8, 0, 8) };
+        var list = new System.Windows.Controls.ListBox { Height = 230, Margin = new Thickness(0, 8, 0, 8) };
         foreach (var r in all)
         {
             string label = $"{r.Tag}   {(r.Published == default ? "" : r.Published.ToLocalTime().ToString("yyyy-MM-dd"))}" +
@@ -220,14 +220,30 @@ public partial class MainWindow : Window
         list.SelectedIndex = 0;
         var field = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x16, 0x1B, 0x24));
         list.Background = field; list.Foreground = Foreground;
-        var notes = new System.Windows.Controls.TextBox
+        // Release notes as plain text (a read-only TextBox draws its text greyed out).
+        var notesText = new System.Windows.Controls.TextBlock
         {
-            Height = 150, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 8, 10, 8),
+            Foreground = (System.Windows.Media.Brush)FindResource("Text"),
         };
-        notes.Background = field; notes.Foreground = Foreground;
-        list.SelectionChanged += (_, _) => notes.Text = (list.SelectedItem as System.Windows.Controls.ListBoxItem)?.Tag is ReleaseInfo r ? r.Notes : "";
-        notes.Text = all[0].Notes;
+        var notes = new System.Windows.Controls.Border
+        {
+            Height = 220, Background = field, BorderThickness = new Thickness(1),
+            BorderBrush = (System.Windows.Media.Brush)FindResource("Line"),
+            Child = new System.Windows.Controls.ScrollViewer
+            {
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto, Content = notesText,
+            },
+        };
+        static string Plain(string md) => System.Text.RegularExpressions.Regex.Replace(
+            md.Replace("\r", "").Replace("**", "").Replace("`", ""), @"(?m)^#+\s*", "").Trim();
+        void ShowNotes(ReleaseInfo? r)
+        {
+            notesText.Text = r == null ? "" : Plain(r.Notes);
+            ((System.Windows.Controls.ScrollViewer)notes.Child).ScrollToTop();
+        }
+        list.SelectionChanged += (_, _) => ShowNotes((list.SelectedItem as System.Windows.Controls.ListBoxItem)?.Tag as ReleaseInfo);
+        ShowNotes(all[0]);
         var install = new System.Windows.Controls.Button { Content = "Install selected version", IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
         var cancel = new System.Windows.Controls.Button { Content = "Cancel", IsCancel = true };
         var buttons = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
