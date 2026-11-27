@@ -72,12 +72,13 @@ struct ExeLayout {
     uintptr_t scroll[2];                   // camera scroll amount, mouse at the screen edge (two copies): "fildll; fidivl" step
     uintptr_t keyScroll;                   // the same for the arrow keys (different stack layout)
     uintptr_t scrollAlign;                 // map view: scroll shift rounded to 8 px ("test cl,7")
+    uintptr_t viewFrac;                    // map view: camera position inside its tile -> pixels (two ftol calls)
     uint32_t layoutTableId;                // "Resolution Specific Rects" table
     std::vector<ImmSite> sites;            // 1280x1024 mode identification
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, {0x616cdc, 0x6170b9}, 0x5fd704, 0x60b729, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, {0x616cdc, 0x6170b9}, 0x5fd704, 0x60b729, 0x60bdc5, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -91,7 +92,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, {0x61304c, 0x613429}, 0x5f9a24, 0x607a99, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, {0x61304c, 0x613429}, 0x5f9a24, 0x607a99, 0x608135, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -141,6 +142,48 @@ void ApplyFrameRate(const ExeLayout& L) {
 //    aligned; smaller steps leave seams in it). With smooth fog there is no
 //    checkerboard, so the view moves in 1 px steps.
 float g_scrollStart = 0.1f, g_scrollScale = 0.80f;
+
+// ftol replacement that rounds DOWN (the CRT's rounds toward zero). The map
+// view turns the camera's position inside its tile into a pixel offset along
+// both screen axes; one of them is negative in half of every tile, where
+// rounding toward zero is off by one pixel compared with the other half. While
+// scrolling, the picture then jumped a pixel sideways each time the camera
+// crossed such a line: a wobble across the scroll direction, "stairs" when
+// scrolling diagonally. Same calling convention as the CRT's _ftol (value in
+// st0, popped; result in edx:eax).
+extern "C" void SwgbmFloorFtol();
+__asm__(
+    ".text\n"
+    ".globl _SwgbmFloorFtol\n"
+    "_SwgbmFloorFtol:\n"
+    "    subl $12, %esp\n"
+    "    fnstcw (%esp)\n"
+    "    movw (%esp), %ax\n"
+    "    andw $0xF3FF, %ax\n"
+    "    orw $0x0400, %ax\n"
+    "    movw %ax, 2(%esp)\n"
+    "    fldcw 2(%esp)\n"
+    "    fistpll 4(%esp)\n"
+    "    fldcw (%esp)\n"
+    "    movl 4(%esp), %eax\n"
+    "    movl 8(%esp), %edx\n"
+    "    addl $12, %esp\n"
+    "    ret\n");   // rounding mode 01 = down
+
+void ApplyViewRounding(const ExeLayout& L) {
+    // "faddp; sub ebx,ecx; mov [esi+128h],bx; call ftol" ... "fsubp; call ftol"
+    static const uint8_t a[] = {0xDE, 0xC1, 0x2B, 0xD9, 0x66, 0x89, 0x9E, 0x28, 0x01, 0x00, 0x00, 0xE8};
+    static const uint8_t b[] = {0xDE, 0xE9, 0xE8};
+    const uintptr_t m = L.viewFrac;
+    if (!m || !PatchCheck(m, a, sizeof(a)) || !PatchCheck(m + 0x2c, b, sizeof(b))) { LOG("view rounding: not found"); return; }
+    int n = 0;
+    for (uintptr_t call : {m + 0x0b, m + 0x2e}) {
+        int32_t rel = (int32_t)((uintptr_t)&SwgbmFloorFtol - (call + 5));
+        n += PatchBytes((void*)(call + 1), &rel, 4) ? 1 : 0;
+    }
+    LOG("view rounding: camera offsets rounded down (%d of 2)", n);
+}
+
 void ApplySmoothScroll(const ExeLayout& L) {
     if (!CfgBool("Fixes", "SmoothScroll", true)) return;
     g_scrollStart = std::max(0.02f, std::min(1.0f, CfgInt("Fixes", "ScrollStartPct", 10) / 100.0f));
@@ -188,6 +231,7 @@ void ApplyEngine(const ExeLayout& L) {
     LOG("engine patches for %s", L.name);
     ApplyFrameRate(L);
     ApplySmoothScroll(L);
+    ApplyViewRounding(L);
     Effects::InstallEngineHooks(L.blitter, L.blitState);
     Zoom::Init();
     int W = Zoom::InternalW(), H = Zoom::InternalH();   // == GameWidth x GameHeight unless zooming

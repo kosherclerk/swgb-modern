@@ -20,6 +20,7 @@ struct Item {
     std::vector<uint8_t> occl;            // w*h, 1 = drawn over (empty = nothing)
     uint64_t occlHash = 0;
     int gone = 0;                         // screen blits since it was last seen
+    bool stale = false;                   // the picture around it changed: bg no longer valid
     // HD rendering cache
     float sKx = 0, sKy = 0;
     int sw = 0, sh = 0, sPad = 0;
@@ -58,7 +59,7 @@ inline uint64_t Mix(uint64_t h, uint64_t v) { h ^= v + 0x9E3779B97F4A7C15ull + (
 uint64_t Signature(const Item& it) {
     uint64_t h = Mix(Mix(Mix(Mix(1, (uint64_t)(uintptr_t)it.surf), (uint64_t)(uint32_t)it.x << 32 | (uint32_t)it.y),
                          (uint64_t)(uint32_t)it.w << 32 | (uint32_t)it.h), it.d.rgb);
-    h = Mix(h, it.d.align); h = Mix(h, (uint64_t)(uint32_t)it.d.charExtra); h = Mix(h, (uint64_t)it.d.ink);
+    h = Mix(h, it.d.align); h = Mix(h, (uint64_t)(uint32_t)it.d.charExtra); h = Mix(h, (uint64_t)it.d.ink); h = Mix(h, it.d.blend);
     const uint8_t* f = (const uint8_t*)&it.d.font;
     for (size_t i = 0; i < sizeof(LOGFONTW); i++) h = Mix(h, f[i]);
     for (const auto& l : it.d.lines) {
@@ -363,6 +364,82 @@ bool FloatText::TransferBegin(const DDSurface* src, DDSurface* dst, const RECT& 
         }
         g_moving.push_back(std::move(m));
     }
+    // A picture made from a surface with texts (a fade: the game blends the
+    // text surface into another one and copies that): a text still in its own
+    // surface whose letters stand out here from the pixels beside them, in a
+    // few colours, moves along in the most common one. What is under its
+    // letters is taken from the pixels beside them.
+    if (g_moving.empty() && !keyed)
+        for (const Item& it : g_items) {
+            const DDSurface* home = it.surf;
+            if (home == src || home == dst || home->w_ != src->w_ || home->h_ != src->h_) continue;
+            int x0 = std::max<int>(it.x, s.left), x1 = std::min<int>(it.x + it.w, s.right);
+            int y0 = std::max<int>(it.y, s.top), y1 = std::min<int>(it.y + it.h, s.bottom);
+            if (x1 - x0 < 4 || y1 - y0 < 4) continue;
+            int total = 0, match = 0, hist[256] = {};
+            for (int y = y0; y < y1; y++) {
+                const uint8_t* hr = home->bits_ + (size_t)y * home->pitch_;
+                const uint8_t* sr = src->bits_ + (size_t)y * src->pitch_;
+                for (int x = x0; x < x1; x++) {
+                    size_t i = (size_t)(y - it.y) * it.w + (x - it.x);
+                    if (!it.cov[i]) continue;
+                    total++; match += hr[x] == it.written[i];
+                }
+            }
+            if (total < 8 || match * 4 < total * 3) continue;   // gone from its own surface
+            Moving m;
+            m.x = x0 + offX; m.y = y0 + offY; m.w = x1 - x0; m.h = y1 - y0;
+            if (m.x < 0 || m.y < 0 || m.x + m.w > dst->w_ || m.y + m.h > dst->h_) continue;
+            m.cov.assign((size_t)m.w * m.h, 0); m.ink.assign(m.cov.size(), 0); m.bg.assign(m.cov.size(), 0);
+            int letters = 0, visible = 0, v = 0;
+            for (int y = 0; y < m.h; y++) {
+                const uint8_t* sr = src->bits_ + (size_t)(y0 + y) * src->pitch_ + x0;
+                for (int x = 0; x < m.w; x++) {
+                    size_t i = (size_t)(y0 - it.y + y) * it.w + (x0 - it.x + x), j = (size_t)y * m.w + x;
+                    m.ink[j] = sr[x];
+                    if (!it.cov[i]) { m.bg[j] = sr[x]; continue; }
+                    // nearest pixel beside it that is not a letter
+                    uint8_t fill = sr[x];
+                    for (int r = 1; r < 8; r++) {
+                        if (x - r >= 0 && !it.cov[i - r]) { fill = sr[x - r]; break; }
+                        if (x + r < m.w && !it.cov[i + r]) { fill = sr[x + r]; break; }
+                    }
+                    m.bg[j] = fill;
+                    m.cov[j] = 255;
+                    letters++;
+                    if (sr[x] != fill) { visible++; hist[sr[x]]++; }
+                }
+            }
+            // the letters stand out from what is beside them
+            if (letters < 8 || visible * 10 < letters * 7) continue;
+            // ... in a few colours (the text blended over a few background
+            // shades), not the many of a textured picture
+            int top[3] = {0, 0, 0};
+            for (int k = 0; k < 256; k++) {
+                int c = hist[k];
+                if (c > top[0]) { top[2] = top[1]; top[1] = top[0]; top[0] = c; v = k; }
+                else if (c > top[1]) { top[2] = top[1]; top[1] = c; }
+                else if (c > top[2]) top[2] = c;
+            }
+            if ((top[0] + top[1] + top[2]) * 100 < visible * 85) continue;
+            m.d = it.d;
+            m.d.ink = v;
+            // shown in the letters' average colour
+            const DDPalette* pp = src->pal_ ? src->pal_ : State().primaryPal;
+            if (pp) {
+                uint32_t r = 0, g = 0, b = 0, n = 0;
+                for (int k = 0; k < 256; k++) {
+                    if (!hist[k]) continue;
+                    r += pp->entries_[k].peRed * hist[k]; g += pp->entries_[k].peGreen * hist[k]; b += pp->entries_[k].peBlue * hist[k]; n += hist[k];
+                }
+                if (n) m.d.blend = 0xFF000000u | (r / n) << 16 | (g / n) << 8 | (b / n);
+            }
+            for (auto& l : m.d.lines) {
+                l.x += offX; l.y += offY;
+                OffsetRect(&l.clip, offX, offY);
+            }
+            g_moving.push_back(std::move(m));
+        }
     LeaveCriticalSection(&g_lock);
     return !g_moving.empty();
 }
@@ -433,6 +510,10 @@ bool FloatText::Prepare(const DDSurface* src, const RECT& d, const RECT& s, int 
         // text in the background's colour - a black shadow on a screen
         // cleared to black - "matches" after being erased)
         it.alive = total && match * 4 >= total * 3 && (!around || aroundSame * 2 >= around);
+        // the picture around the letters is no longer the one recorded (the
+        // game redrew it - scrolling - and drew the text again over itself):
+        // what was under the letters is unknown, taken from beside them
+        it.stale = around && aroundSame * 20 < around * 19;
         // gone for good: covered by newer texts, or not seen for ~1.5 s
         it.gone = it.alive ? 0 : total ? it.gone + 1 : 1000;
         if (!anyOccl) it.occl.clear();
@@ -462,7 +543,15 @@ bool FloatText::Prepare(const DDSurface* src, const RECT& d, const RECT& s, int 
                 g_claim[(size_t)sy * W + sx] = 0;
                 if (!it.shown || (!it.occl.empty() && it.occl[i])) continue;
                 if (sx < s.left || sx >= s.right || sy < s.top || sy >= s.bottom) continue;
-                g_patches.push_back({sy + offY, sx + offX, it.bg[i]});
+                uint8_t v = it.bg[i];
+                if (it.stale) {   // nearest pixel beside it in the row that is not a letter
+                    const uint8_t* row = src->bits_ + (size_t)sy * src->pitch_;
+                    for (int r = 1; r < 12; r++) {
+                        if (x - r >= 0 && !it.cov[i - r]) { v = row[sx - r]; break; }
+                        if (x + r < it.w && !it.cov[i + r]) { v = row[sx + r]; break; }
+                    }
+                }
+                g_patches.push_back({sy + offY, sx + offX, v});
             }
         }
     }
@@ -556,7 +645,7 @@ bool FloatText::Build(std::vector<uint32_t>& px, int cw, int ch, int frameW, int
         const int yLo = inPanel ? panelTop : 0, yHi = inPanel ? ch : panelTop;
         any = true;
         if (g_hd) {
-            const uint32_t ink = palette[it.d.ink & 255] & 0xFFFFFF;   // the colour the game's text has on screen
+            const uint32_t ink = it.d.blend ? it.d.blend & 0xFFFFFF : palette[it.d.ink & 255] & 0xFFFFFF;   // the colour the game's text has on screen
             if (it.sKx != tkx || it.sKy != tky || it.sprite.empty()) RenderSprite(it, tkx, tky);
             const int bx = (int)lroundf(ox) - it.sPad, by = (int)lroundf(oy) - it.sPad;
             rows(by, by + it.sh);

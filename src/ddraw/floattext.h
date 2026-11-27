@@ -39,6 +39,7 @@ struct Draw {                 // one TextOut / DrawText call
     int charExtra = 0;
     uint32_t rgb = 0;         // 0xRRGGBB (signature only; shown in the palette colour of `ink`)
     int ink = 0;              // palette index of the text's pixels
+    uint32_t blend = 0;       // 0xFF000000 | RGB: shown in this colour instead (a text fading in)
     std::vector<Line> lines;
 };
 
