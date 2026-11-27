@@ -45,6 +45,7 @@ private:
     bool ovChanged_ = false;
     Overlay ovRender_;        // presenter-thread copy handed to the backend
     const Overlay* lastOverlay_ = nullptr;
+    Overlay textOv_;          // text layer at the output resolution (HD text, zoom; floattext.h)
     Viewport vp_ = {0, 0, 800, 600};
     int gameW_ = 800, gameH_ = 600;
     const char* backendName_ = "none";

@@ -18,7 +18,7 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 - Frame limiter tied to the monitor's refresh rate, plus VSync with tearing support. Unchanged frames are not re-presented, so the mod adds little CPU load.
 
 **Optional enhancements** (all off in the *Faithful* profile, on in *Enhanced*)
-- **Smooth text**: interface text is drawn with anti-aliased fonts (like Expanding Fronts), blended into the game's own frame. Line breaks, spacing and alignment stay as in the original.
+- **HD text**: interface text is drawn sharp and smooth at your screen's resolution instead of being enlarged from the game's low resolution. Line breaks, positions and alignment stay as in the original. Off, the text is exactly the original game's (as in Expanding Fronts).
 - **Smooth fog of war**: fogged terrain and objects keep all their detail and are evenly darkened instead of drawn as a black checkerboard.
 
 The mod ships no replacement art: everything on screen comes from your copy of the game.
@@ -77,7 +77,7 @@ Turn on **Diagnostics** on the launcher's Mod tab. The log (`SWGBModern.log` in 
 
 - `ddraw.dll` emulates the DirectDraw 1 API the Genie engine uses, with 8-bit surfaces in system memory. A presenter thread uploads each frame and its palette to the GPU, resolves the palette, and scales it in a shader. It also hooks the window and input APIs so the game always sees its own resolution.
 - Engine patches are applied **in memory** and only to executables identified byte-for-byte: Clone Campaigns 1.1 and the base game. Widescreen works through a hook on the engine's resource loader. It rewrites the interface layout table and generates wider panel art at runtime, so nothing is written to the game's data files.
-- Smooth text hooks `TextOutA` and `DrawTextA`/`DrawTextExA`: each string is rendered anti-aliased with the same font, blended with the pixels underneath, and written into the 8-bit surface as the nearest palette colours, so it behaves exactly like the original text. GDI does not anti-alias Arial at the game's sizes (the fonts' gasp tables), so each line is drawn at 4x with GDI's own character positions (hooks on `ExtTextOutW/A`) and averaged down.
+- HD text hooks `TextOutA` and `DrawTextA`/`DrawTextExA`. The game's own call runs unchanged; around it the mod notes the pixels it wrote, the pixels underneath and the lines GDI drew (hooks on `ExtTextOutW/A`: string, start, character advances, font, colour). On the way to the screen those pixels are put back to the background, and the presenter redraws the lines with the font scaled to the output resolution in an overlay. A text stays while the game's buffer still holds its pixels; whatever the game draws over it (cursor, menus) hides that part. The same layer keeps interface text unscaled over the zoomed battlefield.
 - The stretched panel is widened along the plainest connected vertical path through the info panel (found by dynamic programming over colour differences), so no ornament is repeated or cut.
 - Smooth camera: the edge and arrow-key scroll routines rounded the distance down to half a tile and only moved when that much time had passed; the exact distance is used instead. With smooth fog the map view also shifts in 1 px steps instead of the engine's 8 px.
 - Smooth fog wraps the engine's sprite blitter: fogged sprites and terrain tiles are drawn with all their pixels and then darkened through a palette lookup table instead of the black checkerboard.

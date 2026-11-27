@@ -299,12 +299,17 @@ static void CopyRect(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int 
 
 // 1:1 copy to the screen surface that writes only what changed and reports
 // the changed rows (see CopyRowIfChanged).
-static std::vector<int>& CopyToScreen(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s) {
+// With the text layer, rows holding visible texts are copied with the texts
+// replaced by their background (FloatText::Patch).
+static std::vector<int>& CopyToScreen(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s, bool patched) {
     static std::vector<int> rows;
     rows.clear();
     const int dw = d.right - d.left, dh = d.bottom - d.top;
-    for (int y = 0; y < dh; y++)
-        if (CopyRowIfChanged(db + (size_t)(d.top + y) * dp + d.left, sb + (size_t)(s.top + y) * sp + s.left, dw)) rows.push_back(d.top + y);
+    for (int y = 0; y < dh; y++) {
+        const uint8_t* sr = sb + (size_t)(s.top + y) * sp + s.left;
+        if (patched) sr = FloatText::Patch(d.top + y, sr, d.left, dw);
+        if (CopyRowIfChanged(db + (size_t)(d.top + y) * dp + d.left, sr, dw)) rows.push_back(d.top + y);
+    }
     return rows;
 }
 
@@ -372,12 +377,17 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
             bool mirUD = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORUPDOWN);
             bool plain = !stretch && !key.on && !mirLR && !mirUD;
             if (plain && IsPrimary() && src != this) {
-                std::vector<int>& rows = CopyToScreen(bits_, pitch_, d, src->bits_, src->pitch_, s);
-                FloatText::Apply(src, bits_, pitch_, rows);   // zoom: texts go to the overlay instead
-                exactRows = &rows;
+                // texts go to the text layer instead (HD text, zoom)
+                bool patched = FloatText::Prepare(src, d, s, w_, h_);
+                exactRows = &CopyToScreen(bits_, pitch_, d, src->bits_, src->pitch_, s, patched);
             }
-            else if (plain) CopyRect(bits_, pitch_, d, src->bits_, src->pitch_, s, src == this);
-            else CopyGeneral(this, d, src, s, stretch, mirLR, mirUD, key);
+            else {
+                // texts drawn elsewhere move along with 1:1 copies (text layer)
+                bool moving = !stretch && !mirLR && !mirUD && !IsPrimary() && FloatText::TransferBegin(src, this, d, s, key.on, key.lo, key.hi);
+                if (plain) CopyRect(bits_, pitch_, d, src->bits_, src->pitch_, s, src == this);
+                else CopyGeneral(this, d, src, s, stretch, mirLR, mirUD, key);
+                if (moving) FloatText::TransferEnd(this);
+            }
         } else {
             return DDERR_INVALIDPARAMS;
         }

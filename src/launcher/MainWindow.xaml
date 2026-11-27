@@ -84,7 +84,7 @@
             <TextBlock Style="{StaticResource Hint}" Margin="22,0,0,6" Text="Multiplayer note: a wider screen shows more of the battlefield than players on original resolutions see."/>
             <CheckBox Content="Smooth rendering: battlefield redrawn up to 60 times per second (original 20). Game speed unchanged." IsChecked="{Binding EnhSmooth}"/>
             <CheckBox Content="Upscaling filter instead of plain pixels (choose the filter on the Display tab)" IsChecked="{Binding EnhFilter}"/>
-            <CheckBox Content="Smooth text: anti-aliased interface fonts, like Expanding Fronts" IsChecked="{Binding HdText}"/>
+            <CheckBox Content="HD text: interface text drawn sharp at your screen resolution" IsChecked="{Binding HdText}"/>
             <CheckBox Content="Smooth fog of war: full detail, evenly darkened instead of the black checkerboard" IsChecked="{Binding SmoothFog}"/>
           </StackPanel>
         </ScrollViewer>

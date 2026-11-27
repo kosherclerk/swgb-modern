@@ -260,19 +260,26 @@ void Presenter::Run() {
             }
         }
         if (!have || !r) continue;
-        {   // zoom: interface texts and the zoom level, unscaled above the battlefield
-            static std::vector<uint32_t> ftPx;
-            static bool ftShown = false;
-            const bool zoomedFrame = Zoom::On() && frame.width == Zoom::InternalW() && frame.height == Zoom::InternalH();
-            int fy0, fy1;
+        bool textDirty = false;
+        {   // text layer (HD text, zoom): drawn at the viewport's resolution
+            RECT crc;
+            GetClientRect(hwnd_, &crc);
+            const bool zf = Zoom::On() && frame.width == Zoom::InternalW() && frame.height == Zoom::InternalH();
+            Viewport tvp = zf ? ComputeViewport(crc.right, crc.bottom, Zoom::DisplayW(), Zoom::DisplayH())
+                              : ComputeViewport(crc.right, crc.bottom, frame.width, frame.height);
+            int ty0 = 0, ty1 = 0;
             bool any = false;
-            if (zoomedFrame && FloatText::Build(ftPx, fy0, fy1, any)) {
-                if (any) SetOverlay(ftPx.data(), Zoom::DisplayW(), Zoom::DisplayH(), 0, 0, (float)frame.width, (float)frame.height, false, fy0, fy1);
-                else if (ftShown) ClearOverlay();
-                ftShown = any;
-            } else if (!zoomedFrame && ftShown) {
-                ClearOverlay();
-                ftShown = false;
+            if (FloatText::Build(textOv_.pixels, tvp.w, tvp.h, frame.width, frame.height, frame.palette, ty0, ty1, any)) {
+                bool wasVisible = textOv_.visible;
+                textOv_.visible = any;
+                textOv_.width = tvp.w; textOv_.height = tvp.h;
+                textOv_.x = 0; textOv_.y = 0; textOv_.w = (float)frame.width; textOv_.h = (float)frame.height;
+                textOv_.hideFrame = false;
+                textOv_.dirtyY0 = wasVisible ? ty0 : 0;
+                textOv_.dirtyY1 = wasVisible ? ty1 : tvp.h;
+                textDirty = wasVisible || any;
+            } else {
+                textOv_.dirtyY0 = textOv_.dirtyY1 = 0;
             }
         }
         if (Capture::Enabled()) {
@@ -313,9 +320,13 @@ void Presenter::Run() {
         }
         LeaveCriticalSection(&ovLock_);
         if (forceFull && ovRender_.visible) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
-        const Overlay* use = ovRender_.visible ? &ovRender_ : nullptr;
+        if (forceFull && textOv_.visible) { textOv_.dirtyY0 = 0; textOv_.dirtyY1 = textOv_.height; }
+        // videos (and other producers) first, then the text layer
+        const Overlay* use = ovRender_.visible ? &ovRender_ : textOv_.visible ? &textOv_ : nullptr;
+        if (use == &textOv_ && textDirty) ovDirty = true;
+        if (use != lastOverlay_) ovDirty = true;
         Frame* show = &frame;
-        if (use == &ovRender_ && lastOverlay_ != &ovRender_) { ovRender_.dirtyY0 = 0; ovRender_.dirtyY1 = ovRender_.height; }
+        if (use && lastOverlay_ != use) { Overlay* u = (Overlay*)use; u->dirtyY0 = 0; u->dirtyY1 = u->height; }
         lastOverlay_ = use;
         r->SetOverlay(use);
         // zoom: the game frame is larger than what is shown; the battlefield
