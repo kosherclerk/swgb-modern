@@ -52,4 +52,32 @@ bool PatchJump(uintptr_t addr, void* target, size_t len, bool call) {
     return PatchBytes((void*)addr, buf, len);
 }
 
+uint8_t* ExecAlloc(size_t len) {
+    static uint8_t* page = nullptr;
+    static size_t used = 0;
+    static const size_t kPage = 64 * 1024;
+    len = (len + 15) & ~(size_t)15;
+    if (len > kPage) return (uint8_t*)VirtualAlloc(nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!page || used + len > kPage) {
+        page = (uint8_t*)VirtualAlloc(nullptr, kPage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        used = 0;
+        if (!page) return nullptr;
+    }
+    uint8_t* p = page + used;
+    used += len;
+    return p;
+}
+
+void* HookFunction(uintptr_t addr, const uint8_t* prologue, size_t len, void* hook) {
+    if (len < 5 || !PatchCheck(addr, prologue, len)) return nullptr;
+    uint8_t* tramp = ExecAlloc(len + 5);
+    if (!tramp) return nullptr;
+    memcpy(tramp, prologue, len);
+    tramp[len] = 0xE9;
+    int32_t rel = (int32_t)((addr + len) - ((uintptr_t)tramp + len + 5));
+    memcpy(tramp + len + 1, &rel, 4);
+    FlushInstructionCache(GetCurrentProcess(), tramp, len + 5);
+    return PatchJump(addr, hook, len) ? tramp : nullptr;
+}
+
 } // namespace swgbm

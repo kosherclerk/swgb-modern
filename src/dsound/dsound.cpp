@@ -268,7 +268,19 @@ public:
                     const float* k = &tab->coef[(size_t)ph * SincTable::kTaps];
                     int64_t base = i - SincTable::kTaps / 2 + 1;
                     v = 0;
-                    for (int tp = 0; tp < SincTable::kTaps; tp++) v += k[tp] * at(base + tp, c);
+                    if (base >= 0 && base + SincTable::kTaps <= (int64_t)total) {
+                        // all taps inside the buffer (the usual case): direct access
+                        if (bits == 16) {
+                            const int16_t* p = (const int16_t*)d + (size_t)base * ch + c;
+                            for (int tp = 0; tp < SincTable::kTaps; tp++) v += k[tp] * p[tp * ch];
+                            v *= 1.0f / 32768.0f;
+                        } else {
+                            const uint8_t* p = d + (size_t)base * ch + c;
+                            for (int tp = 0; tp < SincTable::kTaps; tp++) v += k[tp] * (p[tp * ch] - 128);
+                            v *= 1.0f / 128.0f;
+                        }
+                    } else
+                        for (int tp = 0; tp < SincTable::kTaps; tp++) v += k[tp] * at(base + tp, c);
                 }
                 s[c] = v;
             }
@@ -414,13 +426,22 @@ void Engine::Run() {
             BYTE* out = nullptr;
             HRESULT hr = rc->GetBuffer(n, &out);
             if (FAILED(hr)) { ok = false; break; }
-            mix.assign((size_t)n * channels, 0.0f);
+            bool any = false;
             EnterCriticalSection(&lock);
-            for (size_t i = 0; i < buffers.size(); i++) {
-                Buffer* b = buffers[i];
-                b->Mix(mix.data(), (int)n, std::min(channels, 2) == 2 ? channels : 1, rate);
+            for (Buffer* b : buffers) if (b->playing_ && b->size_) { any = true; break; }
+            if (any) {
+                mix.assign((size_t)n * channels, 0.0f);
+                for (size_t i = 0; i < buffers.size(); i++) {
+                    Buffer* b = buffers[i];
+                    b->Mix(mix.data(), (int)n, std::min(channels, 2) == 2 ? channels : 1, rate);
+                }
             }
             LeaveCriticalSection(&lock);
+            if (!any) {   // nothing playing: let WASAPI fill silence
+                rc->ReleaseBuffer(n, AUDCLNT_BUFFERFLAGS_SILENT);
+                InterlockedExchangeAdd(&framesMixed, (LONG)n);
+                continue;
+            }
             // soft limiter: transparent below -1 dBFS, smooth knee above
             for (auto& s : mix) {
                 if (limiter) {

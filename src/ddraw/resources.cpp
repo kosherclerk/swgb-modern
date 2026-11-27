@@ -245,15 +245,8 @@ bool Resources::Install(uintptr_t getter, uintptr_t gameFree, uintptr_t gameMall
     g_gameFree = (FreeFn)gameFree;
     g_gameMalloc = (MallocFn)gameMalloc;
     g_layoutIds.assign(layoutIds);
-    if (!PatchCheck(getter, prologue, prologueLen)) { LOG("resources: getter prologue mismatch at %08x", (unsigned)getter); return false; }
-    // trampoline: original prologue + jmp back
-    auto tramp = (uint8_t*)VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    memcpy(tramp, prologue, prologueLen);
-    tramp[prologueLen] = 0xE9;
-    int32_t rel = (int32_t)((getter + prologueLen) - ((uintptr_t)tramp + prologueLen + 5));
-    memcpy(tramp + prologueLen + 1, &rel, 4);
-    g_orig = (ResGetFn)tramp;
-    if (!PatchJump(getter, (void*)&ResGetHook, prologueLen)) return false;
+    g_orig = (ResGetFn)HookFunction(getter, prologue, prologueLen, (void*)&ResGetHook);
+    if (!g_orig) { LOG("resources: getter prologue mismatch at %08x", (unsigned)getter); return false; }
     LOG("resources: getter hooked at %08x", (unsigned)getter);
     return true;
 }

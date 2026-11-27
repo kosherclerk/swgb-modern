@@ -64,7 +64,8 @@ void MarkPrimaryDirty(int y0, int y1, bool palette) {
 // Debug: heuristic stack scan for return addresses into the game's code.
 static void LogStackScan(const char* tag) {
     static int budget = 4, skip = 400;
-    if (skip-- > 0 || budget <= 0 || !CfgBool("Debug", "StackScan", false)) return;
+    static const bool enabled = CfgBool("Debug", "StackScan", false);   // read once, not per blit
+    if (!enabled || skip-- > 0 || budget <= 0) return;
     budget--;
     NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
     uintptr_t* sp = (uintptr_t*)__builtin_frame_address(0);
@@ -276,6 +277,69 @@ static bool ClipBlt(RECT& d, RECT& s, int dw, int dh, int sw, int sh, bool stret
     return d.right > d.left && d.bottom > d.top && s.right > s.left && s.bottom > s.top;
 }
 
+// ---- blit helpers (called with the surface lock held)
+
+struct ColorKey { bool on = false; uint8_t lo = 0, hi = 0; };
+
+// Plain 1:1 copy; an overlapping self-blit is handled by memmove + row order.
+static void CopyRect(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s, bool self) {
+    const int dw = d.right - d.left, dh = d.bottom - d.top;
+    const bool backwards = self && d.top > s.top;
+    for (int i = 0; i < dh; i++) {
+        int y = backwards ? dh - 1 - i : i;
+        memmove(db + (size_t)(d.top + y) * dp + d.left, sb + (size_t)(s.top + y) * sp + s.left, dw);
+    }
+}
+
+// 1:1 copy to the screen surface that writes only what changed and reports
+// the changed rows (see CopyRowIfChanged).
+static const std::vector<int>& CopyToScreen(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s) {
+    static std::vector<int> rows;
+    rows.clear();
+    const int dw = d.right - d.left, dh = d.bottom - d.top;
+    for (int y = 0; y < dh; y++)
+        if (CopyRowIfChanged(db + (size_t)(d.top + y) * dp + d.left, sb + (size_t)(s.top + y) * sp + s.left, dw)) rows.push_back(d.top + y);
+    return rows;
+}
+
+// Colour-keyed, stretched and/or mirrored copy. The source column of every
+// destination column is computed once per blit (no per-pixel division).
+static void CopyGeneral(DDSurface* dst, const RECT& d, DDSurface* src, const RECT& s, bool stretch, bool mirLR, bool mirUD, ColorKey key) {
+    static std::vector<uint8_t> tmp;
+    static std::vector<int> cols;
+    const int dw = d.right - d.left, dh = d.bottom - d.top, sw = s.right - s.left, sh = s.bottom - s.top;
+    const uint8_t* sb = src->bits_;
+    const int sp = src->pitch_;
+    if (src == dst) {   // overlapping: work from a copy of the source rows
+        tmp.assign(src->bits_ + (size_t)s.top * sp, src->bits_ + (size_t)s.bottom * sp);
+        sb = tmp.data() - (size_t)s.top * sp;
+    }
+    cols.resize(dw);
+    for (int x = 0; x < dw; x++) {
+        int sx = stretch ? s.left + (int)((int64_t)x * sw / dw) : s.left + x;
+        cols[x] = mirLR ? s.right - 1 - (sx - s.left) : sx;
+    }
+    const bool plainCols = !stretch && !mirLR;
+    for (int y = 0; y < dh; y++) {
+        int sy = stretch ? s.top + (int)((int64_t)y * sh / dh) : s.top + y;
+        if (mirUD) sy = s.bottom - 1 - (sy - s.top);
+        const uint8_t* srow = sb + (size_t)sy * sp;
+        uint8_t* drow = dst->bits_ + (size_t)(d.top + y) * dst->pitch_ + d.left;
+        if (!key.on) {
+            if (plainCols) memcpy(drow, srow + s.left, dw);
+            else for (int x = 0; x < dw; x++) drow[x] = srow[cols[x]];
+        } else if (plainCols && key.lo == key.hi) {
+            const uint8_t* sr = srow + s.left;
+            for (int x = 0; x < dw; x++) if (sr[x] != key.lo) drow[x] = sr[x];
+        } else {
+            for (int x = 0; x < dw; x++) {
+                uint8_t v = srow[cols[x]];
+                if (v < key.lo || v > key.hi) drow[x] = v;
+            }
+        }
+    }
+}
+
 HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect, DWORD flags, LPDDBLTFX fx) {
     auto* src = (DDSurface*)srcI;
     RECT d = dstRect ? *dstRect : RECT{0, 0, w_, h_};
@@ -286,55 +350,24 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
             uint8_t c = fx ? (uint8_t)fx->dwFillColor : 0;
             RECT s = d;
             if (!ClipBlt(d, s, w_, h_, w_, h_, false)) return DD_OK;
-            for (LONG y = d.top; y < d.bottom; y++) memset(bits_ + y * pitch_ + d.left, c, d.right - d.left);
+            for (LONG y = d.top; y < d.bottom; y++) memset(bits_ + (size_t)y * pitch_ + d.left, c, d.right - d.left);
         } else if (src) {
             RECT s = srcRect ? *srcRect : RECT{0, 0, src->w_, src->h_};
             bool stretch = (s.right - s.left) != (d.right - d.left) || (s.bottom - s.top) != (d.bottom - d.top);
             if (!ClipBlt(d, s, w_, h_, src->w_, src->h_, stretch)) return DD_OK;
-            bool key = false;
-            uint8_t lo = 0, hi = 0;
+            ColorKey key;
             if (flags & DDBLT_KEYSRCOVERRIDE && fx) {
-                key = true; lo = (uint8_t)fx->ddckSrcColorkey.dwColorSpaceLowValue; hi = (uint8_t)fx->ddckSrcColorkey.dwColorSpaceHighValue;
+                key = {true, (uint8_t)fx->ddckSrcColorkey.dwColorSpaceLowValue, (uint8_t)fx->ddckSrcColorkey.dwColorSpaceHighValue};
             } else if ((flags & DDBLT_KEYSRC) && src->hasSrcKey_) {
-                key = true; lo = (uint8_t)src->srcKeyLo_; hi = (uint8_t)src->srcKeyHi_;
+                key = {true, (uint8_t)src->srcKeyLo_, (uint8_t)src->srcKeyHi_};
             }
-            if (hi < lo) hi = lo;
+            if (key.hi < key.lo) key.hi = key.lo;
             bool mirLR = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORLEFTRIGHT);
             bool mirUD = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORUPDOWN);
-            int dw = d.right - d.left, dh = d.bottom - d.top;
-            int sw = s.right - s.left, sh = s.bottom - s.top;
-            if (!stretch && !key && !mirLR && !mirUD && IsPrimary() && src != this) {
-                static std::vector<int> rows;
-                rows.clear();
-                for (int y = 0; y < dh; y++)
-                    if (CopyRowIfChanged(bits_ + (d.top + y) * pitch_ + d.left, src->bits_ + (s.top + y) * src->pitch_ + s.left, dw)) rows.push_back(d.top + y);
-                exactRows = &rows;
-            } else if (!stretch && !key && !mirLR && !mirUD) {
-                // overlapping self-blit is handled by memmove + row order
-                bool backwards = src == this && d.top > s.top;
-                for (int i = 0; i < dh; i++) {
-                    int y = backwards ? dh - 1 - i : i;
-                    memmove(bits_ + (d.top + y) * pitch_ + d.left, src->bits_ + (s.top + y) * src->pitch_ + s.left, dw);
-                }
-            } else {
-                std::vector<uint8_t> tmp;
-                const uint8_t* sb = src->bits_;
-                int sp = src->pitch_;
-                if (src == this) { tmp.assign(bits_, bits_ + (size_t)pitch_ * h_); sb = tmp.data(); }
-                for (int y = 0; y < dh; y++) {
-                    int sy = s.top + (int)((int64_t)y * sh / dh);
-                    if (mirUD) sy = s.bottom - 1 - (sy - s.top);
-                    const uint8_t* srow = sb + sy * sp;
-                    uint8_t* drow = bits_ + (d.top + y) * pitch_ + d.left;
-                    for (int x = 0; x < dw; x++) {
-                        int sx = s.left + (int)((int64_t)x * sw / dw);
-                        if (mirLR) sx = s.right - 1 - (sx - s.left);
-                        uint8_t c = srow[sx];
-                        if (key && c >= lo && c <= hi) continue;
-                        drow[x] = c;
-                    }
-                }
-            }
+            bool plain = !stretch && !key.on && !mirLR && !mirUD;
+            if (plain && IsPrimary() && src != this) exactRows = &CopyToScreen(bits_, pitch_, d, src->bits_, src->pitch_, s);
+            else if (plain) CopyRect(bits_, pitch_, d, src->bits_, src->pitch_, s, src == this);
+            else CopyGeneral(this, d, src, s, stretch, mirLR, mirUD, key);
         } else {
             return DDERR_INVALIDPARAMS;
         }

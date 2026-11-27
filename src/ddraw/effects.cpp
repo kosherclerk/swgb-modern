@@ -82,7 +82,8 @@ void __cdecl BlitHook(uint32_t a1, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     // drawn with an all-marker pattern: marker = a pixel the sprite covers.
     // The real surface is never touched by this pass.
     int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
-    g_cover.assign((size_t)rw * rh, 0);
+    if (g_cover.size() < (size_t)rw * rh + 4) g_cover.resize((size_t)rw * rh + 4);
+    memset(g_cover.data(), 0, (size_t)rw * rh);
     if ((int)g_scratchRows.size() <= y1) g_scratchRows.resize((size_t)y1 + 1);
     for (int yy = 0; yy < rh; yy++) g_scratchRows[y0 + yy] = g_cover.data() + (size_t)yy * rw - x0;
     uint32_t saved[8];
@@ -98,7 +99,13 @@ void __cdecl BlitHook(uint32_t a1, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     for (int yy = 0; yy < rh; yy++) {
         uint8_t* row = rows[y0 + yy] + x0;
         const uint8_t* cv = &g_cover[(size_t)yy * rw];
-        for (int xx = 0; xx < rw; xx++) if (cv[xx] == kMarker) row[xx] = g_dark[row[xx]];
+        int xx = 0;
+        while (xx < rw) {
+            uint32_t four; memcpy(&four, cv + xx, 4);          // 4 coverage bytes at once (buffer has 4 spare)
+            if (!four) { xx += 4; continue; }
+            int e = std::min(rw, xx + 4);
+            for (; xx < e; xx++) if (cv[xx] == kMarker) row[xx] = g_dark[row[xx]];
+        }
     }
 }
 
@@ -113,16 +120,8 @@ void Effects::InstallEngineHooks(uintptr_t blitter, uintptr_t blitState) {
     g_regs = (uint32_t*)(blitState + 0x60);
     g_clip = (int32_t*)(blitState + 0x80);
     static const uint8_t prologue[] = {0x55, 0x8B, 0xEC, 0x53, 0x56};   // push ebp; mov ebp,esp; push ebx; push esi
-    bool ok = PatchCheck(blitter, prologue, sizeof(prologue));
-    if (ok) {
-        auto tramp = (uint8_t*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-        memcpy(tramp, prologue, sizeof(prologue));
-        tramp[5] = 0xE9;
-        int32_t rel = (int32_t)((blitter + 5) - ((uintptr_t)tramp + 10));
-        memcpy(tramp + 6, &rel, 4);
-        g_blit = (BlitFn)tramp;
-        ok = PatchJump(blitter, (void*)&BlitHook, 5);
-    }
+    g_blit = (BlitFn)HookFunction(blitter, prologue, sizeof(prologue), (void*)&BlitHook);
+    bool ok = g_blit != nullptr;
     LOG("smooth fog: %s (brightness %d%%)", ok ? "sprite blitter hooked" : "engine code not recognised - disabled", pct);
     if (!ok) g_enabled = false;
 }

@@ -94,10 +94,10 @@ DWORD WINAPI ProfilerMain(LPVOID) {
                     HMODULE m = nullptr; char name[64] = "?";
                     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)e.second, &m))
                         GetModuleBaseNameA(GetCurrentProcess(), m, name, sizeof(name));
-                    if (!_stricmp(name, "ntdll.dll") || !_stricmp(name, "win32u.dll") || !_stricmp(name, "KERNELBASE.dll")) continue;
+                    
                     char b[96]; snprintf(b, sizeof(b), " %s+%lx:%.1f%%", name, (unsigned long)(e.second - (uintptr_t)m), e.first * 100.0 / t.samples);
                     line += b;
-                    if (++shown >= 30) break;
+                    if (++shown >= 60) break;
                 }
                 LOG("profile thread %lu top:%s", t.id, line.c_str());
                 t.hits.clear(); t.samples = 0;

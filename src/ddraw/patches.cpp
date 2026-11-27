@@ -20,7 +20,7 @@ struct Cave {
     void jmp(uintptr_t target) { u8(0xE9); rel.push_back({b.size(), target}); u32(0); }
     void call(uintptr_t target) { u8(0xE8); rel.push_back({b.size(), target}); u32(0); }
     uintptr_t Place() {
-        auto mem = (uint8_t*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        auto mem = ExecAlloc(b.size());
         if (!mem) return 0;
         memcpy(mem, b.data(), b.size());
         for (auto& r : rel) {
@@ -149,7 +149,7 @@ void ApplySmoothScroll(const ExeLayout& L) {
         static const uint8_t fldStart[] = {0xD9, 0x05};
         if (!PatchCheck(m, calc, sizeof(calc)) || !PatchCheck(m - 0x16, fldStart, 2)) continue;
         // fld st0; call ftol (7 bytes) -> jmp stub: fmul [scale]; jmp clamp (m+0x46)
-        auto stub = (uint8_t*)VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        auto stub = ExecAlloc(16);
         uint32_t scaleAddr = (uint32_t)(uintptr_t)&g_scrollScale;
         stub[0] = 0xD8; stub[1] = 0x0D; memcpy(stub + 2, &scaleAddr, 4);             // fmul dword [g_scrollScale]
         stub[6] = 0xE9; int32_t back = (int32_t)((m + 0x46) - ((uintptr_t)stub + 11)); memcpy(stub + 7, &back, 4);
