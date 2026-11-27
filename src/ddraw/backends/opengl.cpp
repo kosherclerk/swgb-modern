@@ -92,7 +92,8 @@ public:
 
     bool Present(const Frame& f, const Viewport& vp, int cw, int ch, const PresentOptions& opt) override {
         if (cw <= 0 || ch <= 0) return true;
-        if (f.width != fw_ || f.height != fh_) CreateFrameResources(f.width, f.height);
+        bool fresh = false;
+        if (f.width != fw_ || f.height != fh_) { CreateFrameResources(f.width, f.height); fresh = true; }
         if (swapInterval_ && opt.vsync != lastVsync_) { swapInterval_(opt.vsync ? 1 : 0); lastVsync_ = opt.vsync; }
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glActiveTexture(GL_TEXTURE0);
@@ -106,17 +107,23 @@ public:
         glBindVertexArray(vao_);
         glDisable(GL_BLEND);
         glDisable(GL_DEPTH_TEST);
-        // pass 1
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glViewport(0, 0, f.width, f.height);
-        glUseProgram(progPal_);
-        glUniform1i(uPalH_, f.height);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        // pass 2
+        // pass 1 (palette resolve), only when the indices or the palette
+        // changed; otherwise the frame texture is still current (zoom
+        // animation, resize, overlay changes re-present the same frame)
+        if (fresh || f.Dirty()) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+            glViewport(0, 0, f.width, f.height);
+            glUseProgram(progPal_);
+            glUniform1i(uPalH_, f.height);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        // pass 2; clear only when the image leaves bars
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, cw, ch);
-        glClearColor(0, 0, 0, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
+        if (vp.x > 0 || vp.y > 0 || vp.w < cw || vp.h < ch || (overlay_ && overlay_->visible)) {
+            glViewport(0, 0, cw, ch);
+            glClearColor(0, 0, 0, 1);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, frameTex_);
         glUseProgram(progScale_);
@@ -132,8 +139,8 @@ public:
             }
         DrawOverlay(f, vp, ch);
         SwapBuffers(dc_);
-        GLenum e = glGetError();
-        if (e != GL_NO_ERROR) LOG("GL error %04x", e);
+        // glGetError can make the driver synchronise: check once a second
+        if (++frameNo_ % 60 == 0) { GLenum e = glGetError(); if (e != GL_NO_ERROR) LOG("GL error %04x", e); }
         return true;
     }
 
@@ -219,6 +226,7 @@ private:
     GLuint progOverlay_ = 0, ovTex_ = 0;
     int ovW_ = 0, ovH_ = 0;
     GLuint progPal_ = 0, progScale_ = 0, vao_ = 0, fbo_ = 0, idxTex_ = 0, palTex_ = 0, frameTex_ = 0;
+    unsigned frameNo_ = 0;
     GLint uPalH_ = -1, uSrc_ = -1, uDst_ = -1, uFilter_ = -1, uSharp_ = -1, uUv_ = -1;
     int fw_ = 0, fh_ = 0;
 };

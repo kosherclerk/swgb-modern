@@ -99,18 +99,21 @@ public:
         // pass 1: palette resolve
         ID3D11ShaderResourceView* null3[3] = {};
         ctx_->PSSetShaderResources(0, 3, null3);
-        ctx_->OMSetRenderTargets(1, &frameRtv_, nullptr);
-        D3D11_VIEWPORT v1 = {0, 0, (float)f.width, (float)f.height, 0, 1};
-        ctx_->RSSetViewports(1, &v1);
-        ID3D11ShaderResourceView* s1[2] = {idxSrv_, palSrv_};
-        ctx_->PSSetShaderResources(0, 2, s1);
-        ctx_->PSSetShader(psPal_, nullptr, 0);
-        ctx_->Draw(3, 0);
+        if (!frameValid_ || f.Dirty()) {   // the frame texture is still current otherwise
+            ctx_->OMSetRenderTargets(1, &frameRtv_, nullptr);
+            D3D11_VIEWPORT v1 = {0, 0, (float)f.width, (float)f.height, 0, 1};
+            ctx_->RSSetViewports(1, &v1);
+            ID3D11ShaderResourceView* s1[2] = {idxSrv_, palSrv_};
+            ctx_->PSSetShaderResources(0, 2, s1);
+            ctx_->PSSetShader(psPal_, nullptr, 0);
+            ctx_->Draw(3, 0);
+            frameValid_ = true;
+        }
         // pass 2: scale
         ctx_->PSSetShaderResources(0, 3, null3);
         ctx_->OMSetRenderTargets(1, &bbRtv_, nullptr);
         float black[4] = {0, 0, 0, 1};
-        ctx_->ClearRenderTargetView(bbRtv_, black);
+        if (vp.x > 0 || vp.y > 0 || vp.w < cw || vp.h < ch || (overlay_ && overlay_->visible)) ctx_->ClearRenderTargetView(bbRtv_, black);
         ctx_->PSSetShaderResources(2, 1, &frameSrv_);
         ctx_->PSSetSamplers(0, 1, &samp_);
         ctx_->PSSetConstantBuffers(0, 1, &cb_);
@@ -129,6 +132,7 @@ public:
     void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
 
 private:
+    bool frameValid_ = false;   // frame texture holds the resolved current frame
     void DrawOverlay(const Frame& f, const Viewport& vp) {
         const Overlay* o = overlay_;
         if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
@@ -162,6 +166,7 @@ private:
     }
 
     bool CreateFrameResources(int w, int h) {
+        frameValid_ = false;
         // Nothing may still reference the old textures: unbind everything (it is
         // all set again each frame) and submit pending work before releasing.
         // (Releasing bound/in-flight frame textures crashed the AMD driver when

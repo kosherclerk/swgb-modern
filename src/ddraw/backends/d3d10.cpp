@@ -89,17 +89,20 @@ public:
         dev_->VSSetShader(vs_);
         ID3D10ShaderResourceView* null3[3] = {};
         dev_->PSSetShaderResources(0, 3, null3);
-        dev_->OMSetRenderTargets(1, &frameRtv_, nullptr);
-        D3D10_VIEWPORT v1 = {0, 0, (UINT)f.width, (UINT)f.height, 0, 1};
-        dev_->RSSetViewports(1, &v1);
-        ID3D10ShaderResourceView* s1[2] = {idxSrv_, palSrv_};
-        dev_->PSSetShaderResources(0, 2, s1);
-        dev_->PSSetShader(psPal_);
-        dev_->Draw(3, 0);
+        if (!frameValid_ || f.Dirty()) {   // the frame texture is still current otherwise
+            dev_->OMSetRenderTargets(1, &frameRtv_, nullptr);
+            D3D10_VIEWPORT v1 = {0, 0, (UINT)f.width, (UINT)f.height, 0, 1};
+            dev_->RSSetViewports(1, &v1);
+            ID3D10ShaderResourceView* s1[2] = {idxSrv_, palSrv_};
+            dev_->PSSetShaderResources(0, 2, s1);
+            dev_->PSSetShader(psPal_);
+            dev_->Draw(3, 0);
+            frameValid_ = true;
+        }
         dev_->PSSetShaderResources(0, 3, null3);
         dev_->OMSetRenderTargets(1, &bbRtv_, nullptr);
         float black[4] = {0, 0, 0, 1};
-        dev_->ClearRenderTargetView(bbRtv_, black);
+        if (vp.x > 0 || vp.y > 0 || vp.w < cw || vp.h < ch || (overlay_ && overlay_->visible)) dev_->ClearRenderTargetView(bbRtv_, black);
         dev_->PSSetShaderResources(2, 1, &frameSrv_);
         dev_->PSSetSamplers(0, 1, &samp_);
         dev_->PSSetConstantBuffers(0, 1, &cb_);
@@ -119,6 +122,7 @@ public:
     void WaitForNextFrame() override { dxgi_.WaitForNextFrame(); }
 
 private:
+    bool frameValid_ = false;   // frame texture holds the resolved current frame
     void DrawOverlay(const Frame& f, const Viewport& vp) {
         const Overlay* o = overlay_;
         if (!o || !o->visible || o->width <= 0 || o->height <= 0) return;
@@ -152,6 +156,7 @@ private:
     }
 
     bool CreateFrameResources(int w, int h) {
+        frameValid_ = false;
         // Nothing may still reference the old textures: unbind everything (it is
         // all set again each frame) and submit pending work before releasing.
         // (Releasing bound/in-flight frame textures crashed the AMD driver when
