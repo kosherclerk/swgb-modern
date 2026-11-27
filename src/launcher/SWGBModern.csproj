@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>SWGBModern</AssemblyName>
     <RootNamespace>SWGBModern</RootNamespace>
-    <Version>1.5.2</Version>
+    <Version>1.6.0</Version>
     <Product>SWGB Modern</Product>
     <Description>Compatibility and enhancement mod for Star Wars Galactic Battlegrounds</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
