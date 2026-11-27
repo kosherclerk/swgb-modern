@@ -18,6 +18,7 @@ double g_holdUntil = 0;            // detent: notches before this time are ignor
 // time-based easing, independent of the frame rate.
 volatile float g_z = 1, g_target = 1;
 double g_lastAnim = 0;
+double g_lastChange = -100;
 
 double Seconds() {
     static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
@@ -67,7 +68,9 @@ bool Zoom::OnWheel(int notches) {
     // rest) continues
     if (g_detent && from != 1.0f && (from - 1.0f) * (t - 1.0f) < 0) t = 1.0f;
     if (g_detent && t == 1.0f && from != 1.0f) g_holdUntil = now + 0.25;
-    g_target = std::max(g_zMin, std::min(g_zMax, t));
+    float nt = std::max(g_zMin, std::min(g_zMax, t));
+    if (nt != g_target || notches) g_lastChange = now;
+    g_target = nt;
     return true;
 }
 
@@ -87,6 +90,7 @@ bool Zoom::Animate() {
     return true;
 }
 
+double Zoom::LastChange() { return g_lastChange; }
 bool Zoom::Animating() { return g_on && g_z != g_target; }
 
 void Zoom::BattlefieldSource(float& x, float& y, float& w, float& h) {

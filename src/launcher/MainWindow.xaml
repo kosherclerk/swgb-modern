@@ -141,11 +141,11 @@
               <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
               <TextBlock Style="{StaticResource Label}" Text="Zoom out"/>
               <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ZoomChoices}" SelectedValue="{Binding ZoomOut}"/>
-              <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Zoom in" Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
+              <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Zoom in"/>
               <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ZoomInChoices}" SelectedValue="{Binding ZoomIn}"
-                        Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
+                       />
               <CheckBox Grid.Row="2" Grid.Column="1" Content="Stop at 100% when zooming through it" IsChecked="{Binding ZoomSnap}"
-                        Visibility="{Binding ZoomEnabled, Converter={StaticResource Vis}}"/>
+                       />
             </Grid>
             <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Text="Zoom the battlefield with the mouse wheel, like newer RTS games (widescreen only). Zooming out shows more of the map; the game then draws a larger battlefield, which costs more CPU. The original sprites are only scaled, not redrawn."/>
 

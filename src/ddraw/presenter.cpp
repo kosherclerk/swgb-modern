@@ -3,6 +3,7 @@
 #include "window.h"
 #include "capture.h"
 #include "zoom.h"
+#include "floattext.h"
 #include <algorithm>
 #include <math.h>
 
@@ -259,6 +260,21 @@ void Presenter::Run() {
             }
         }
         if (!have || !r) continue;
+        {   // zoom: interface texts and the zoom level, unscaled above the battlefield
+            static std::vector<uint32_t> ftPx;
+            static bool ftShown = false;
+            const bool zoomedFrame = Zoom::On() && frame.width == Zoom::InternalW() && frame.height == Zoom::InternalH();
+            int fy0, fy1;
+            bool any = false;
+            if (zoomedFrame && FloatText::Build(ftPx, fy0, fy1, any)) {
+                if (any) SetOverlay(ftPx.data(), Zoom::DisplayW(), Zoom::DisplayH(), 0, 0, (float)frame.width, (float)frame.height, false, fy0, fy1);
+                else if (ftShown) ClearOverlay();
+                ftShown = any;
+            } else if (!zoomedFrame && ftShown) {
+                ClearOverlay();
+                ftShown = false;
+            }
+        }
         if (Capture::Enabled()) {
             Capture::OnFrame(frame);
             Capture::Tick(hwnd_, totalShown, totalNew, lastPresentMs);

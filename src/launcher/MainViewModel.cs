@@ -104,12 +104,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             On(nameof(ResolutionSummary));
         }
     }
-    public List<Choice> ZoomInChoices { get; } = new() { new("100", "No zoom in"), new("125", "Up to 125%"), new("150", "Up to 150%"), new("200", "Up to 200%") };
-    private string _zoomIn = "125";
-    public string ZoomIn { get => _zoomIn; set => Set(ref _zoomIn, value); }
+    public List<Choice> ZoomInChoices { get; } = new() { new("100", "100% (no zoom in)"), new("125", "Up to 125%"), new("150", "Up to 150%"), new("200", "Up to 200%") };
+    private string _zoomIn = "100";
+    public string ZoomIn { get => _zoomIn; set { if (Set(ref _zoomIn, value)) On(nameof(ZoomEnabled)); } }
     private bool _zoomSnap = true;
     public bool ZoomSnap { get => _zoomSnap; set => Set(ref _zoomSnap, value); }
-    public bool ZoomEnabled => ZoomOut != "off";
+    // zoom is on when it can go either way from 100%
+    public bool ZoomEnabled => ZoomOut != "100" || ZoomIn != "100";
     public ObservableCollection<SystemInfo.ScaleOption> ScaleChoices { get; } = new();
     public List<Choice> PanelStyles { get; } = new() { new("stretch", "Stretched (wide info panel)"), new("center", "Centred original panel") };
     public List<Choice> Resamplers { get; } = new() { new("sinc", "Windowed sinc (best)"), new("cubic", "Cubic"), new("linear", "Linear (classic)") };
@@ -172,8 +173,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int CustomHeight { get => _customHeight; set => Set(ref _customHeight, value); }
     private string _panelStyle = "stretch";
     public string PanelStyle { get => _panelStyle; set => Set(ref _panelStyle, value); }
-    public List<Choice> ZoomChoices { get; } = new() { new("off", "Off"), new("85", "Up to 85% (zoom out a little)"), new("70", "Up to 70%"), new("60", "Up to 60% (most map, most CPU)") };
-    private string _zoomOut = "off";
+    public List<Choice> ZoomChoices { get; } = new() { new("100", "100% (no zoom out)"), new("85", "Up to 85% (zoom out a little)"), new("70", "Up to 70%"), new("60", "Up to 60% (most map, most CPU)") };
+    private string _zoomOut = "100";
     public string ZoomOut { get => _zoomOut; set { if (Set(ref _zoomOut, value)) On(nameof(ZoomEnabled)); } }
 
     public (int W, int H) EffectiveResolution()
@@ -235,8 +236,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         EnhWidescreen = enhanced;
         EnhSmooth = enhanced;
         Filter = enhanced ? "sharp" : "nearest";
-        HdText = false;     // optional extras, not part of a profile
-        SmoothFog = false;
+        HdText = enhanced;
+        SmoothFog = enhanced;
         PanelStyle = "stretch";
         Prefs.Profile = name;
         foreach (var n in new[] { nameof(EnhWidescreen), nameof(EnhSmooth), nameof(EnhFilter), nameof(ProfileText) }) On(n);
@@ -292,8 +293,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CustomWidth = ini.GetInt("Display", "GameWidth", 1920);
         CustomHeight = ini.GetInt("Display", "GameHeight", 1080);
         PanelStyle = Pick(PanelStyles, ini.GetString("Widescreen", "PanelStyle", "stretch"), "stretch");
-        ZoomOut = ini.GetBool("Zoom", "Enabled", false) ? Pick(ZoomChoices, ini.GetString("Zoom", "MaxOut", "70"), "70") : "off";
-        ZoomIn = Pick(ZoomInChoices, ini.GetString("Zoom", "MaxIn", "125"), "125");
+        bool zoomOn = ini.GetBool("Zoom", "Enabled", false);
+        ZoomOut = zoomOn ? Pick(ZoomChoices, ini.GetString("Zoom", "MaxOut", "70"), "100") : "100";
+        ZoomIn = zoomOn ? Pick(ZoomInChoices, ini.GetString("Zoom", "MaxIn", "125"), "100") : "100";
         ZoomSnap = ini.GetBool("Zoom", "SnapAt100", true);
         var mon = ini.GetString("Display", "Monitor", "");
         Monitor = Monitors.Any(m => m.Value == mon) ? mon : "";
@@ -357,8 +359,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Display", "GameHeight", widescreen ? h : 0);
         ini.Set("Fixes", "Widescreen", widescreen);
         ini.Set("Widescreen", "PanelStyle", PanelStyle);
-        ini.Set("Zoom", "Enabled", ZoomOut != "off");
-        if (ZoomOut != "off") ini.Set("Zoom", "MaxOut", ZoomOut);
+        ini.Set("Zoom", "Enabled", ZoomEnabled);
+        ini.Set("Zoom", "MaxOut", ZoomOut);
         ini.Set("Zoom", "MaxIn", ZoomIn);
         ini.Set("Zoom", "SnapAt100", ZoomSnap);
         ini.Set("Display", "Monitor", Monitor);

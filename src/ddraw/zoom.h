@@ -33,6 +33,7 @@ bool OnWheel(int notches);
 // advance the animation; true while it is still moving
 bool Animate();
 bool Animating();
+double LastChange();   // QPC seconds of the last zoom change (indicator)
 // game frame <-> display coordinates (display = the DisplayW x DisplayH image)
 void GameToDisplay(float gx, float gy, float& dx, float& dy);
 void DisplayToGame(float dx, float dy, int& gx, int& gy);

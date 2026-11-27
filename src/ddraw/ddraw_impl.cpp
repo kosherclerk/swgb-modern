@@ -2,6 +2,7 @@
 #include "ddraw_impl.h"
 #include "capture.h"
 #include "zoom.h"
+#include "floattext.h"
 #include <emmintrin.h>
 #include "presenter.h"
 #include "window.h"
@@ -298,7 +299,7 @@ static void CopyRect(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int 
 
 // 1:1 copy to the screen surface that writes only what changed and reports
 // the changed rows (see CopyRowIfChanged).
-static const std::vector<int>& CopyToScreen(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s) {
+static std::vector<int>& CopyToScreen(uint8_t* db, int dp, const RECT& d, const uint8_t* sb, int sp, const RECT& s) {
     static std::vector<int> rows;
     rows.clear();
     const int dw = d.right - d.left, dh = d.bottom - d.top;
@@ -370,7 +371,11 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
             bool mirLR = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORLEFTRIGHT);
             bool mirUD = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORUPDOWN);
             bool plain = !stretch && !key.on && !mirLR && !mirUD;
-            if (plain && IsPrimary() && src != this) exactRows = &CopyToScreen(bits_, pitch_, d, src->bits_, src->pitch_, s);
+            if (plain && IsPrimary() && src != this) {
+                std::vector<int>& rows = CopyToScreen(bits_, pitch_, d, src->bits_, src->pitch_, s);
+                FloatText::Apply(src, bits_, pitch_, rows);   // zoom: texts go to the overlay instead
+                exactRows = &rows;
+            }
             else if (plain) CopyRect(bits_, pitch_, d, src->bits_, src->pitch_, s, src == this);
             else CopyGeneral(this, d, src, s, stretch, mirLR, mirUD, key);
         } else {

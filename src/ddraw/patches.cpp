@@ -69,14 +69,15 @@ struct ExeLayout {
     uintptr_t viewInterval, mapInterval;   // game screen redraw throttles
     uintptr_t worldStep;                   // world update: "cmp eax,32h" (minimum ms between updates)
     uintptr_t blitter, blitState;          // masked sprite blitter (THIS_COD) and its state (THIS_DAT)
-    uintptr_t scroll[2];                   // camera scroll amount (edge / keyboard): "fildll; fidivl" step
+    uintptr_t scroll[2];                   // camera scroll amount, mouse at the screen edge (two copies): "fildll; fidivl" step
+    uintptr_t keyScroll;                   // the same for the arrow keys (different stack layout)
     uintptr_t scrollAlign;                 // map view: scroll shift rounded to 8 px ("test cl,7")
     uint32_t layoutTableId;                // "Resolution Specific Rects" table
     std::vector<ImmSite> sites;            // 1280x1024 mode identification
 };
 
 const ExeLayout kCloneCampaigns = {
-    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, {0x616cdc, 0x6170b9}, 0x60b729, 53290,
+    "Clone Campaigns", 0x424bb9, 0x424bcb, 0x42c960, 0x4d5060, 0x632cca, 0x632b9d, 0x4f2fd7, 0x4f2f17, 0x61e92a, 0x651bc0, 0x7a4000, {0x616cdc, 0x6170b9}, 0x5fd704, 0x60b729, 53290,
     {
         {0x45a364, 0x500, 'W'},                          // in-game mode select from config
         {0x45acb9, 0x500, 'W'}, {0x45acbe, 0x400, 'H'},  // options screen apply
@@ -90,7 +91,7 @@ const ExeLayout kCloneCampaigns = {
     }};
 
 const ExeLayout kBaseGame = {
-    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, {0x61304c, 0x613429}, 0x607a99, 50006,
+    "Galactic Battlegrounds", 0x424329, 0x42433b, 0x42c0c0, 0x4d4b30, 0x62ef5a, 0x62ee2d, 0x4f1c57, 0x4f1b97, 0x61acaa, 0x64ebc0, 0x7a2000, {0x61304c, 0x613429}, 0x5f9a24, 0x607a99, 50006,
     {
         {0x459a04, 0x500, 'W'},
         {0x45a359, 0x500, 'W'}, {0x45a35e, 0x400, 'H'},
@@ -128,7 +129,7 @@ void ApplyFrameRate(const ExeLayout& L) {
 }
 
 // Smooth camera. Three things made scrolling jump:
-//  - both scroll routines (mouse at the screen edge, arrow keys) compute the
+//  - the scroll routines (mouse at the screen edge, arrow keys) compute the
 //    distance as elapsed / scroll interval, then round it DOWN to a multiple
 //    of half a tile and only remember the time when they moved: half a tile
 //    (48 px) about every 50 ms whatever the frame rate. The rounding is
@@ -144,20 +145,30 @@ void ApplySmoothScroll(const ExeLayout& L) {
     if (!CfgBool("Fixes", "SmoothScroll", true)) return;
     g_scrollStart = std::max(0.02f, std::min(1.0f, CfgInt("Fixes", "ScrollStartPct", 10) / 100.0f));
     g_scrollScale = std::max(0.25f, std::min(4.0f, CfgInt("Fixes", "ScrollSpeedPct", 80) / 100.0f));
-    static const uint8_t calc[] = {0xDF, 0x6C, 0x24, 0x10, 0x89, 0x44, 0x24, 0x10, 0x89, 0x4C, 0x24, 0x14, 0xDA, 0x74, 0x24, 0x10, 0xD9, 0xC0, 0xE8};
+    // Each site: the distance calculation ("fildll elapsed; fidivl interval;
+    // fld st0; call ftol" then rounding to half tiles), the "fld [1.0]" of the
+    // first step, and the clamp the rounded value flows into. The rounding is
+    // replaced by a jump to a stub that scales the exact distance and continues
+    // at the clamp.
+    struct Site { uintptr_t calc; const uint8_t* bytes; size_t len; int firstStep, clamp; };
+    static const uint8_t edge[] = {0xDF, 0x6C, 0x24, 0x10, 0x89, 0x44, 0x24, 0x10, 0x89, 0x4C, 0x24, 0x14, 0xDA, 0x74, 0x24, 0x10, 0xD9, 0xC0, 0xE8};
+    static const uint8_t keys[] = {0xDF, 0x6C, 0x24, 0x14, 0x8B, 0x82, 0xD4, 0x08, 0x00, 0x00, 0x89, 0x4C, 0x24, 0x18, 0x89, 0x44, 0x24, 0x14,
+                                   0xDA, 0x74, 0x24, 0x14, 0xD9, 0xC0, 0xE8};
+    const Site sites[] = {{L.scroll[0], edge, sizeof(edge), -0x16, 0x46}, {L.scroll[1], edge, sizeof(edge), -0x16, 0x46},
+                          {L.keyScroll, keys, sizeof(keys), -0x14, 0x4c}};
     int ok = 0;
-    for (uintptr_t m : L.scroll) {
+    for (const Site& st : sites) {
         static const uint8_t fldStart[] = {0xD9, 0x05};
-        if (!PatchCheck(m, calc, sizeof(calc)) || !PatchCheck(m - 0x16, fldStart, 2)) continue;
-        // fld st0; call ftol (7 bytes) -> jmp stub: fmul [scale]; jmp clamp (m+0x46)
+        const uintptr_t m = st.calc, fldSt0 = m + st.len - 3;   // "fld st0; call" ends the pattern
+        if (!m || !PatchCheck(m, st.bytes, st.len) || !PatchCheck(m + st.firstStep, fldStart, 2)) continue;
         auto stub = ExecAlloc(16);
         uint32_t scaleAddr = (uint32_t)(uintptr_t)&g_scrollScale;
         stub[0] = 0xD8; stub[1] = 0x0D; memcpy(stub + 2, &scaleAddr, 4);             // fmul dword [g_scrollScale]
-        stub[6] = 0xE9; int32_t back = (int32_t)((m + 0x46) - ((uintptr_t)stub + 11)); memcpy(stub + 7, &back, 4);
-        uint8_t jmp[7] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};
-        int32_t to = (int32_t)((uintptr_t)stub - (m + 0x10 + 5)); memcpy(jmp + 1, &to, 4);
+        stub[6] = 0xE9; int32_t back = (int32_t)((m + st.clamp) - ((uintptr_t)stub + 11)); memcpy(stub + 7, &back, 4);
+        uint8_t jmp[7] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};                            // replaces "fld st0; call ftol"
+        int32_t to = (int32_t)((uintptr_t)stub - (fldSt0 + 5)); memcpy(jmp + 1, &to, 4);
         uint32_t startAddr = (uint32_t)(uintptr_t)&g_scrollStart;
-        if (PatchBytes((void*)(m + 0x10), jmp, sizeof(jmp)) && PatchBytes((void*)(m - 0x16 + 2), &startAddr, 4)) ok++;
+        if (PatchBytes((void*)fldSt0, jmp, sizeof(jmp)) && PatchBytes((void*)(m + st.firstStep + 2), &startAddr, 4)) ok++;
     }
     static const uint8_t align[] = {0xF6, 0xC1, 0x07, 0x74, 0x21, 0x33, 0xFF, 0x66, 0x3B, 0xCF, 0x7F, 0x03, 0x8D, 0x70, 0x07, 0x83, 0xE6, 0xF8};
     static const uint8_t alignY[] = {0xF6, 0xC3, 0x07, 0x74, 0x1E, 0x66, 0x3B, 0xDF, 0x8B, 0xC2, 0x7F, 0x03, 0x8D, 0x42, 0x07, 0x24, 0xF8};
@@ -170,7 +181,7 @@ void ApplySmoothScroll(const ExeLayout& L) {
             how = "1 px";
         } else how = "8 px (kept for the fog checkerboard)";
     }
-    LOG("smooth scroll: %d of 2 scroll routines patched, view steps %s, speed %d%%", ok, how, (int)(g_scrollScale * 100 + 0.5f));
+    LOG("smooth scroll: %d of 3 scroll routines patched, view steps %s, speed %d%%", ok, how, (int)(g_scrollScale * 100 + 0.5f));
 }
 
 void ApplyEngine(const ExeLayout& L) {
