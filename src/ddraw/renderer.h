@@ -24,11 +24,6 @@ struct Frame {
     // when the palette differs. Both are "everything" after a size change.
     int dirtyY0 = 0, dirtyY1 = 0;
     bool paletteChanged = true;
-    // Optional per-pixel colour multiplier applied after the palette lookup
-    // (graphics enhancements: smooth fog, shadows, lighting). value/128, so 128
-    // is exactly 1.0. Empty = none (the image stays bit-exact). Uploaded for the
-    // same dirty rows as the pixels.
-    std::vector<uint8_t> shade;
     bool Dirty() const { return dirtyY1 > dirtyY0 || paletteChanged; }
     void MarkAll() { dirtyY0 = 0; dirtyY1 = height; paletteChanged = true; }
 };
@@ -74,26 +69,6 @@ public:
 
 protected:
     const Overlay* overlay_ = nullptr;
-    // Shade plane bookkeeping shared by the backends: which rows of the shade
-    // texture need uploading, and from where (a neutral 128 buffer when the
-    // frame has no shade but the texture still holds an old one).
-    bool shadeActive_ = false;
-    std::vector<uint8_t> neutralShade_;
-    bool ShadeUpload(const Frame& f, bool textureNew, int& y0, int& y1, const uint8_t*& data) {
-        size_t n = (size_t)f.width * f.height;
-        if (!f.shade.empty() && f.shade.size() == n) {
-            bool full = textureNew || !shadeActive_;
-            shadeActive_ = true;
-            y0 = full ? 0 : f.dirtyY0; y1 = full ? f.height : f.dirtyY1;
-            data = f.shade.data();
-            return y1 > y0;
-        }
-        if (!shadeActive_ && !textureNew) return false;
-        shadeActive_ = false;
-        if (neutralShade_.size() != n) neutralShade_.assign(n, 128);
-        y0 = 0; y1 = f.height; data = neutralShade_.data();
-        return true;
-    }
     // Overlay rect in client coordinates for a viewport.
     static void OverlayRect(const Overlay& o, const Frame& f, const Viewport& vp, float& x, float& y, float& w, float& h) {
         float sx = (float)vp.w / f.width, sy = (float)vp.h / f.height;

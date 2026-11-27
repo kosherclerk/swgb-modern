@@ -14,7 +14,6 @@ const char* g_hlslSource = R"HLSL(
 Texture2D<uint>   IndexTex   : register(t0);
 Texture2D<float4> PaletteTex : register(t1);
 Texture2D<float4> FrameTex   : register(t2);
-Texture2D<uint>   ShadeTex   : register(t4);   // colour multiplier, 128 = 1.0
 SamplerState LinearSamp      : register(s0);
 
 cbuffer ScaleCB : register(b0) {
@@ -38,8 +37,7 @@ VSOut VSMain(uint id : SV_VertexID) {
 float4 PSPalette(VSOut i) : SV_Target {
     int2 p = int2(i.pos.xy);
     uint idx = IndexTex.Load(int3(p, 0));
-    float k = ShadeTex.Load(int3(p, 0)) / 128.0;
-    return float4(saturate(PaletteTex.Load(int3(idx, 0, 0)).rgb * k), 1);
+    return float4(PaletteTex.Load(int3(idx, 0, 0)).rgb, 1);
 }
 
 float3 Px(float2 p) { // fetch texel by integer coordinate with clamping
@@ -94,21 +92,18 @@ const char* g_glslPaletteFrag = R"GLSL(
 #ifdef SWGBM_VK
 layout(set = 0, binding = 0) uniform usampler2D IndexTex;
 layout(set = 0, binding = 1) uniform sampler2D PaletteTex;
-layout(set = 0, binding = 2) uniform usampler2D ShadeTex;
 layout(location = 0) out vec4 outColor;
 #define FRAGPOS ivec2(gl_FragCoord.xy)
 #else
 uniform usampler2D IndexTex;
 uniform sampler2D PaletteTex;
-uniform usampler2D ShadeTex;
 uniform int frameH;
 out vec4 outColor;
 #define FRAGPOS ivec2(int(gl_FragCoord.x), frameH - 1 - int(gl_FragCoord.y))
 #endif
 void main() {
     uint idx = texelFetch(IndexTex, FRAGPOS, 0).r;
-    float k = float(texelFetch(ShadeTex, FRAGPOS, 0).r) / 128.0;
-    outColor = vec4(clamp(texelFetch(PaletteTex, ivec2(int(idx), 0), 0).rgb * k, 0.0, 1.0), 1.0);
+    outColor = vec4(texelFetch(PaletteTex, ivec2(int(idx), 0), 0).rgb, 1.0);
 }
 )GLSL";
 

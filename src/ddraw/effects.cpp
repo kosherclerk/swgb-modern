@@ -5,8 +5,9 @@
 // black checkerboard pattern: pixel = (pixel & mask[row & 3]) | fill[row & 3],
 // so half of every fogged pixel pair is simply black. The blitter is wrapped;
 // for a fogged draw (pattern enabled, black fill):
-//   * a coverage pass draws the sprite with an all-marker pattern to learn
-//     exactly which pixels it covers, then the old pixels are put back;
+//   * a coverage pass draws the sprite with an all-marker pattern into a
+//     scratch buffer (through the blitter's row table) to learn exactly
+//     which pixels it covers;
 //   * the real draw uses a keep-everything pattern, so the sprite or terrain
 //     tile comes out with all its pixels;
 //   * those pixels are darkened through a palette table (each colour -> the
@@ -34,7 +35,8 @@ typedef void(__cdecl* BlitFn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, 
 BlitFn g_blit = nullptr;
 const uint8_t kMarker = 48;                 // rare index; only used inside a coverage pass
 
-std::vector<uint8_t> g_save, g_cover;
+std::vector<uint8_t> g_cover;           // coverage scratch (marker = covered)
+std::vector<uint8_t*> g_scratchRows;    // row table pointing into it
 
 bool FogPattern() {
     bool fillBlack = !g_regs[4] && !g_regs[5] && !g_regs[6] && !g_regs[7];
@@ -74,22 +76,21 @@ void __cdecl BlitHook(uint32_t a1, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     uint8_t** rows = *g_rowTable;
     UpdateDarkTable();
     if (x1 < x0 || y1 < y0 || !rows || !g_darkValid) { g_blit(a1, x, y, w, h, a6, a7, flags); return; }
-    // coverage pass: marker everywhere the sprite draws, then the old pixels back
+    // Coverage pass into a scratch buffer: the blitter finds each destination
+    // row through the row table (*g_rowTable), so pointing that table at
+    // scratch rows makes it draw there. Scratch starts as 0 and the sprite is
+    // drawn with an all-marker pattern: marker = a pixel the sprite covers.
+    // The real surface is never touched by this pass.
     int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
-    g_save.resize((size_t)rw * rh);
-    g_cover.resize((size_t)rw * rh);
-    for (int yy = 0; yy < rh; yy++) memcpy(&g_save[(size_t)yy * rw], rows[y0 + yy] + x0, rw);
+    g_cover.assign((size_t)rw * rh, 0);
+    if ((int)g_scratchRows.size() <= y1) g_scratchRows.resize((size_t)y1 + 1);
+    for (int yy = 0; yy < rh; yy++) g_scratchRows[y0 + yy] = g_cover.data() + (size_t)yy * rw - x0;
     uint32_t saved[8];
     memcpy(saved, g_regs, sizeof(saved));
     for (int i = 0; i < 4; i++) { g_regs[i] = 0; g_regs[4 + i] = kMarker * 0x01010101u; }
+    *g_rowTable = g_scratchRows.data();
     g_blit(a1, x, y, w, h, a6, a7, flags);
-    for (int yy = 0; yy < rh; yy++) {
-        uint8_t* row = rows[y0 + yy] + x0;
-        const uint8_t* before = &g_save[(size_t)yy * rw];
-        uint8_t* cv = &g_cover[(size_t)yy * rw];
-        for (int xx = 0; xx < rw; xx++) cv[xx] = row[xx] == kMarker && before[xx] != kMarker;
-        memcpy(row, before, rw);
-    }
+    *g_rowTable = rows;
     // the real draw with all the sprite's pixels, then those pixels darkened
     for (int i = 0; i < 4; i++) { g_regs[i] = 0xFFFFFFFFu; g_regs[4 + i] = 0; }
     g_blit(a1, x, y, w, h, a6, a7, flags);
@@ -97,7 +98,7 @@ void __cdecl BlitHook(uint32_t a1, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     for (int yy = 0; yy < rh; yy++) {
         uint8_t* row = rows[y0 + yy] + x0;
         const uint8_t* cv = &g_cover[(size_t)yy * rw];
-        for (int xx = 0; xx < rw; xx++) if (cv[xx]) row[xx] = g_dark[row[xx]];
+        for (int xx = 0; xx < rw; xx++) if (cv[xx] == kMarker) row[xx] = g_dark[row[xx]];
     }
 }
 

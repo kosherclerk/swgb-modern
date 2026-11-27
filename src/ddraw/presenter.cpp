@@ -207,7 +207,7 @@ void Presenter::Run() {
 
     Frame frame;
     DWORD frames = 0, uniqueFrames = 0, skipped = 0, fpsTick = GetTickCount();
-    int64_t tSnap = 0, tText = 0, tPres = 0;
+    int64_t tSnap = 0, tPres = 0;
     bool forceFull = true;
     int lastCw = -1, lastCh = -1;
     while (running_) {
@@ -321,8 +321,8 @@ void Presenter::Run() {
                 frames * 1000.0 / (GetTickCount() - fpsTick), uniqueFrames * 1000.0 / (GetTickCount() - fpsTick),
                 skipped * 1000.0 / (GetTickCount() - fpsTick),
                 frame.width, frame.height, vp.w, vp.h, vp.x, vp.y, backendName_);
-            if (CfgBool("Debug", "ThreadReport", false)) LOG("present: time per 5s: snapshot %.0f ms, text %.0f ms, present %.0f ms", tSnap * 1000.0 / freq.QuadPart, tText * 1000.0 / freq.QuadPart, tPres * 1000.0 / freq.QuadPart);
-            tSnap = tText = tPres = 0;
+            if (CfgBool("Debug", "ThreadReport", false)) LOG("present: time per 5s: snapshot %.0f ms, text 0 ms, present %.0f ms", tSnap * 1000.0 / freq.QuadPart, tPres * 1000.0 / freq.QuadPart);
+            tSnap = tPres = 0;
             frames = 0;
             uniqueFrames = 0;
             skipped = 0;

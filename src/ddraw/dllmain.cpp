@@ -7,6 +7,7 @@
 #include "textlayer.h"
 
 using namespace swgbm;
+namespace swgbm { void StartProfiler(); }
 
 static bool g_init = false;
 
@@ -19,6 +20,7 @@ static void Init() {
     Window::InstallHooks();
     AudioFix::Install();
     Patches::Apply(exe);
+    StartProfiler();
 }
 
 extern "C" {

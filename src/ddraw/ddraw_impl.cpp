@@ -1,5 +1,6 @@
 // Software emulation of the DirectDraw 1 subset used by the Genie engine.
 #include "ddraw_impl.h"
+#include <emmintrin.h>
 #include "presenter.h"
 #include "window.h"
 #include "renderer.h"
@@ -25,6 +26,31 @@ struct Lock_ {
 };
 
 static void NotifyPrimaryChanged(bool flip) { Presenter::Get().FrameReady(flip); }
+
+// Copy one row to the screen surface, writing only the 16-byte blocks that
+// differ; returns whether anything changed. One pass instead of a copy here
+// plus a compare and a copy in the presenter (the engine re-sends mostly
+// identical frames).
+__attribute__((target("sse2"))) static bool CopyRowIfChanged(uint8_t* d, const uint8_t* s, int n) {
+    bool changed = false;
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        __m128i a = _mm_loadu_si128((const __m128i*)(s + i)), b = _mm_loadu_si128((const __m128i*)(d + i));
+        if (_mm_movemask_epi8(_mm_cmpeq_epi8(a, b)) != 0xFFFF) { _mm_storeu_si128((__m128i*)(d + i), a); changed = true; }
+    }
+    for (; i < n; i++) if (d[i] != s[i]) { d[i] = s[i]; changed = true; }
+    return changed;
+}
+
+// Rows of the screen surface that a blit changed (exactly known).
+static void MarkPrimaryRows(const std::vector<int>& rows, int h) {
+    auto& st = State();
+    EnterCriticalSection(&st.lock);
+    if ((int)st.rowsChanged.size() != h) st.rowsChanged.assign(h, 0);
+    for (int y : rows) { st.rowsChanged[y] = 1; st.changedY0 = std::min(st.changedY0, y); st.changedY1 = std::max(st.changedY1, y + 1); }
+    InterlockedIncrement(&st.version);
+    LeaveCriticalSection(&st.lock);
+}
 
 void MarkPrimaryDirty(int y0, int y1, bool palette) {
     auto& st = State(); // caller may or may not hold the (recursive) lock
@@ -253,6 +279,7 @@ static bool ClipBlt(RECT& d, RECT& s, int dw, int dh, int sw, int sh, bool stret
 HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect, DWORD flags, LPDDBLTFX fx) {
     auto* src = (DDSurface*)srcI;
     RECT d = dstRect ? *dstRect : RECT{0, 0, w_, h_};
+    const std::vector<int>* exactRows = nullptr;   // screen blits: the rows that changed
     {
         Lock_ l;
         if (flags & DDBLT_COLORFILL) {
@@ -276,7 +303,13 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
             bool mirUD = fx && (flags & DDBLT_DDFX) && (fx->dwDDFX & DDBLTFX_MIRRORUPDOWN);
             int dw = d.right - d.left, dh = d.bottom - d.top;
             int sw = s.right - s.left, sh = s.bottom - s.top;
-            if (!stretch && !key && !mirLR && !mirUD) {
+            if (!stretch && !key && !mirLR && !mirUD && IsPrimary() && src != this) {
+                static std::vector<int> rows;
+                rows.clear();
+                for (int y = 0; y < dh; y++)
+                    if (CopyRowIfChanged(bits_ + (d.top + y) * pitch_ + d.left, src->bits_ + (s.top + y) * src->pitch_ + s.left, dw)) rows.push_back(d.top + y);
+                exactRows = &rows;
+            } else if (!stretch && !key && !mirLR && !mirUD) {
                 // overlapping self-blit is handled by memmove + row order
                 bool backwards = src == this && d.top > s.top;
                 for (int i = 0; i < dh; i++) {
@@ -312,8 +345,9 @@ HRESULT DDSurface::Blt(LPRECT dstRect, LPDIRECTDRAWSURFACE srcI, LPRECT srcRect,
     if (IsPrimary()) {
         bool frame = (int64_t)(d.right - d.left) * (d.bottom - d.top) * 2 >= (int64_t)w_ * h_;
         if (h_ > 600) LogStackScan(frame ? "blt-frame" : "blt-partial");
-        MarkPrimaryDirty(d.top, d.bottom, false);
-        NotifyPrimaryChanged(frame);
+        if (exactRows) { if (!exactRows->empty()) MarkPrimaryRows(*exactRows, h_); }
+        else MarkPrimaryDirty(d.top, d.bottom, false);
+        NotifyPrimaryChanged(frame);   // also for unchanged frames: paces the game loop
     }
     return DD_OK;
 }
@@ -507,14 +541,20 @@ bool SnapshotPrimary(Frame& out) {
     if (resized) { out.pixels.assign((size_t)p->w_ * p->h_, 0); y0 = 0; y1 = p->h_; }
     // The engine re-blits the whole back buffer even when nothing moved, so
     // compare with the previous snapshot and keep only rows that really changed.
+    // Rows a screen blit reported as changed are copied directly.
     int c0 = INT_MAX, c1 = 0;
-    for (int y = y0; y < y1; y++) {
+    bool exact = (int)st.rowsChanged.size() == p->h_;
+    int e0 = exact ? std::max(0, st.changedY0) : INT_MAX, e1 = exact ? std::min(p->h_, st.changedY1) : 0;
+    for (int y = std::min(y0, e0); y < std::max(y1, e1); y++) {
         uint8_t* dst = out.pixels.data() + (size_t)y * p->w_;
         const uint8_t* src = p->bits_ + (size_t)y * p->pitch_;
-        if (!resized && memcmp(dst, src, p->w_) == 0) continue;
+        bool known = exact && y >= e0 && y < e1 && st.rowsChanged[y];
+        if (known) st.rowsChanged[y] = 0;
+        else if (y < y0 || y >= y1 || (!resized && memcmp(dst, src, p->w_) == 0)) continue;
         memcpy(dst, src, p->w_);
         c0 = std::min(c0, y); c1 = y + 1;
     }
+    st.changedY0 = 1 << 30; st.changedY1 = 0;
     out.dirtyY0 = c0 < c1 ? c0 : 0;
     out.dirtyY1 = c0 < c1 ? c1 : 0;
     out.paletteChanged = st.paletteDirty || resized;

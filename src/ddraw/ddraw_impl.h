@@ -150,7 +150,9 @@ struct DDState {
     std::vector<DDSurface*> surfaces;
     DDPalette* primaryPal = nullptr;
     // change tracking for the presenter (guarded by lock)
-    int dirtyY0 = 0, dirtyY1 = 1 << 30;
+    int dirtyY0 = 0, dirtyY1 = 1 << 30;      // rows to compare with the last snapshot
+    std::vector<uint8_t> rowsChanged;        // rows known to have changed (no compare needed)
+    int changedY0 = 1 << 30, changedY1 = 0;  // range of rowsChanged that may be set
     bool paletteDirty = true;
     volatile LONG version = 0;
 };

@@ -82,6 +82,19 @@ struct Mask {
 };
 Mask g_mask;
 
+// Anti-aliased copies of the game's fonts, created once per LOGFONT.
+HFONT SmoothFont(HDC dc) {
+    static std::vector<std::pair<LOGFONTA, HFONT>> cache;
+    LOGFONTA lf = {};
+    GetObjectA(GetCurrentObject(dc, OBJ_FONT), sizeof(lf), &lf);
+    lf.lfQuality = ANTIALIASED_QUALITY;
+    for (auto& e : cache) if (!memcmp(&e.first, &lf, sizeof(lf))) return e.second;
+    HFONT f = CreateFontIndirectA(&lf);
+    if (cache.size() >= 32) { DeleteObject(cache.front().second); cache.erase(cache.begin()); }
+    cache.push_back({lf, f});
+    return f;
+}
+
 // Draws `draw(maskDC, dx, dy)` anti-aliased into the mask (surface box
 // bx0..bx1 x by0..by1) and blends it into the surface with the DC's text
 // colour, respecting the DC's clip region.
@@ -103,11 +116,7 @@ void Render(HDC dc, DDSurface* s, int bx0, int by0, int bx1, int by1, Draw draw)
     int bw = bx1 - bx0, bh = by1 - by0;
     if (!g_mask.Ensure(bw, bh)) { if (rgn) DeleteObject(rgn); return; }
     for (int y = 0; y < bh; y++) memset(g_mask.bits + (size_t)y * g_mask.w, 0, (size_t)bw * 4);
-    LOGFONTA lf = {};
-    GetObjectA(GetCurrentObject(dc, OBJ_FONT), sizeof(lf), &lf);
-    lf.lfQuality = ANTIALIASED_QUALITY;
-    HFONT font = CreateFontIndirectA(&lf);
-    HGDIOBJ oldFont = SelectObject(g_mask.dc, font);
+    HGDIOBJ oldFont = SelectObject(g_mask.dc, SmoothFont(dc));
     SetBkMode(g_mask.dc, TRANSPARENT);
     SetTextColor(g_mask.dc, RGB(255, 255, 255));
     SetTextAlign(g_mask.dc, GetTextAlign(dc));
@@ -115,7 +124,6 @@ void Render(HDC dc, DDSurface* s, int bx0, int by0, int bx1, int by1, Draw draw)
     draw(g_mask.dc, -bx0, -by0);
     GdiFlush();
     SelectObject(g_mask.dc, oldFont);
-    DeleteObject(font);
 
     const PALETTEENTRY* pal = PaletteOf(s);
     if (!pal) { if (rgn) DeleteObject(rgn); return; }
@@ -166,7 +174,7 @@ BOOL WINAPI H_TextOutA(HDC dc, int x, int y, LPCSTR str, int len) {
     else if (align & TA_BOTTOM) top -= sz.cy;
     RECT box = {left, top, left + sz.cx, top + sz.cy};
     FillOpaque(dc, box);
-    GdiFlush();
+    GdiFlush();   // the blend reads the surface memory directly
     Render(dc, s, left - tm.tmOverhang - 2, top - 1, left + sz.cx + tm.tmOverhang + 3, top + std::max<int>(sz.cy, tm.tmHeight) + 2,
            [&](HDC m, int dx, int dy) { TextOutA(m, x + dx, y + dy, str, len); });
     return TRUE;

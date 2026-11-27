@@ -11,6 +11,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $inp = "$env:TEMP\inp.exe"
 New-Item -ItemType Directory -Force $Out | Out-Null
 $ini = "$Game\SWGBModern.ini"
+$iniOrig = Get-Content $ini -Raw   # restored at the end
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public class TW { [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
@@ -74,4 +75,6 @@ foreach ($r in $Renderers) {
     Set-Ini @{ Mode = 'borderless' }
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
 }
+Get-Process battlegrounds_x1 -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 1
+Set-Content $ini $iniOrig -NoNewline
 $results | Export-Csv "$Out\results.csv" -NoTypeInformation

@@ -13,7 +13,7 @@ public:
         if (dev_) dev_->ClearState();
         SafeRelease(psOverlay_); SafeRelease(blend_); SafeRelease(ovSrv_); SafeRelease(ovTex_);
         SafeRelease(cb_); SafeRelease(samp_); SafeRelease(vs_); SafeRelease(psPal_); SafeRelease(psScale_);
-        SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(palSrv_); SafeRelease(palTex_); SafeRelease(shadeSrv_); SafeRelease(shadeTex_);
+        SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(palSrv_); SafeRelease(palTex_);
         SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_); SafeRelease(bbRtv_);
         SafeRelease(dev_);
     }
@@ -82,15 +82,6 @@ public:
             D3D10_BOX box = {0, (UINT)f.dirtyY0, 0, (UINT)f.width, (UINT)f.dirtyY1, 1};
             dev_->UpdateSubresource(idxTex_, 0, &box, f.pixels.data() + (size_t)f.dirtyY0 * f.width, f.width, 0);
         }
-        {
-            int sy0, sy1;
-            const uint8_t* sd;
-            if (ShadeUpload(f, shadeNew_, sy0, sy1, sd)) {
-                D3D10_BOX box = {0, (UINT)sy0, 0, (UINT)f.width, (UINT)sy1, 1};
-                dev_->UpdateSubresource(shadeTex_, 0, &box, sd + (size_t)sy0 * f.width, f.width, 0);
-            }
-            shadeNew_ = false;
-        }
         if (f.paletteChanged && SUCCEEDED(palTex_->Map(0, D3D10_MAP_WRITE_DISCARD, 0, &mt))) { memcpy(mt.pData, f.palette, 1024); palTex_->Unmap(0); }
         ScaleConstants sc = MakeScaleConstants(f, vp, opt);
         void* p;
@@ -106,7 +97,6 @@ public:
         dev_->RSSetViewports(1, &v1);
         ID3D10ShaderResourceView* s1[2] = {idxSrv_, palSrv_};
         dev_->PSSetShaderResources(0, 2, s1);
-        dev_->PSSetShaderResources(4, 1, &shadeSrv_);
         dev_->PSSetShader(psPal_);
         dev_->Draw(3, 0);
         dev_->PSSetShaderResources(0, 3, null3);
@@ -166,16 +156,13 @@ private:
         dev_->ClearState();
         dev_->Flush();
         SafeRelease(idxSrv_); SafeRelease(idxTex_); SafeRelease(frameRtv_); SafeRelease(frameSrv_); SafeRelease(frameTex_);
-        SafeRelease(shadeSrv_); SafeRelease(shadeTex_);
+       
         D3D10_TEXTURE2D_DESC td = {};
         td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.SampleDesc.Count = 1;
         td.Format = DXGI_FORMAT_R8_UINT; td.Usage = D3D10_USAGE_DEFAULT;
         td.BindFlags = D3D10_BIND_SHADER_RESOURCE; td.CPUAccessFlags = 0;
         if (FAILED(dev_->CreateTexture2D(&td, nullptr, &idxTex_))) return false;
         dev_->CreateShaderResourceView(idxTex_, nullptr, &idxSrv_);
-        if (FAILED(dev_->CreateTexture2D(&td, nullptr, &shadeTex_))) return false;
-        dev_->CreateShaderResourceView(shadeTex_, nullptr, &shadeSrv_);
-        shadeNew_ = true;
         td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.Usage = D3D10_USAGE_DEFAULT; td.CPUAccessFlags = 0;
         td.BindFlags = D3D10_BIND_SHADER_RESOURCE | D3D10_BIND_RENDER_TARGET;
         if (FAILED(dev_->CreateTexture2D(&td, nullptr, &frameTex_))) return false;
@@ -199,9 +186,6 @@ private:
     ID3D10SamplerState* samp_ = nullptr;
     ID3D10Buffer* cb_ = nullptr;
     ID3D10Texture2D* idxTex_ = nullptr;
-    ID3D10Texture2D* shadeTex_ = nullptr;
-    ID3D10ShaderResourceView* shadeSrv_ = nullptr;
-    bool shadeNew_ = true;
     ID3D10ShaderResourceView* idxSrv_ = nullptr;
     ID3D10Texture2D* palTex_ = nullptr;
     ID3D10ShaderResourceView* palSrv_ = nullptr;

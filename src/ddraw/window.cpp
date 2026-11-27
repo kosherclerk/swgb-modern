@@ -254,11 +254,12 @@ HWND WINAPI H_WindowFromPoint(POINT p) {
 // has nothing to do: yield until input arrives or 1 ms passes. Gameplay frames
 // are paced by Flip() and never hit this path, so the simulation is unaffected.
 LONG g_lastFlipSeen = -1;
+DWORD g_idleWaitMs = 2;
 BOOL WINAPI H_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm) {
     BOOL r = pPeekMessageA(m, h, a, b, rm);
     if (!r && g_idleFix) {
         LONG fc = g_flipCounter;
-        if (fc == g_lastFlipSeen) MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
+        if (fc == g_lastFlipSeen) MsgWaitForMultipleObjects(0, nullptr, FALSE, g_idleWaitMs, QS_ALLINPUT);
         g_lastFlipSeen = fc;
     }
     return r;
@@ -334,6 +335,7 @@ void Window::InstallHooks() {
     g_windowed = CfgStr("Display", "Mode", "borderless") == "windowed";
     g_lockCursor = CfgBool("Display", "LockCursor", true);
     g_idleFix = CfgBool("Fixes", "IdleCPU", true);
+    g_idleWaitMs = (DWORD)std::max(1, std::min(16, CfgInt("Fixes", "IdleWaitMs", 2)));
     struct H { const char* name; void* fn; void** orig; } hooks[] = {
         {"GetCursorPos", (void*)H_GetCursorPos, (void**)&pGetCursorPos},
         {"SetCursorPos", (void*)H_SetCursorPos, (void**)&pSetCursorPos},
