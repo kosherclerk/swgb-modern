@@ -28,11 +28,31 @@ struct Frame {
     void MarkAll() { dirtyY0 = 0; dirtyY1 = height; paletteChanged = true; }
 };
 
+// Part of the game frame drawn into part of the window (mouse-wheel zoom draws
+// the battlefield and the command panel as two regions).
+struct Region {
+    int x = 0, y = 0, w = 0, h = 0;          // destination, client pixels
+    float u0 = 0, v0 = 0, u1 = 1, v1 = 1;    // source, fraction of the frame
+    Filter filter = Filter::Nearest;
+};
+
 struct PresentOptions {
     Filter filter = Filter::Nearest;
     bool vsync = true;
     float sharpness = 0.5f;             // unused (kept for the shader constant layout)
+    // Empty: the whole frame into the viewport. Otherwise these regions.
+    std::vector<Region> regions;
 };
+
+// The regions to draw for a frame (the whole frame into vp unless the
+// presenter set regions).
+inline std::vector<Region> RegionsFor(const Viewport& vp, const PresentOptions& opt) {
+    if (!opt.regions.empty()) return opt.regions;
+    Region r;
+    r.x = vp.x; r.y = vp.y; r.w = vp.w; r.h = vp.h;
+    r.filter = opt.filter;
+    return {r};
+}
 
 // RGBA layer composited above the game image (intro videos, HD text, HD menu
 // backgrounds). Pixels are premultiplied BGRA, width*height, top-down.
@@ -98,6 +118,7 @@ struct ScaleConstants {
     int   filter;       // Filter enum
     float sharpness;
     float pad[2];
+    float uvRect[4];    // source u0, v0, width, height (fractions of the frame)
 };
 
 } // namespace swgbm

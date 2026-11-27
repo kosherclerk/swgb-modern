@@ -83,9 +83,6 @@ public:
             dev_->UpdateSubresource(idxTex_, 0, &box, f.pixels.data() + (size_t)f.dirtyY0 * f.width, f.width, 0);
         }
         if (f.paletteChanged && SUCCEEDED(palTex_->Map(0, D3D10_MAP_WRITE_DISCARD, 0, &mt))) { memcpy(mt.pData, f.palette, 1024); palTex_->Unmap(0); }
-        ScaleConstants sc = MakeScaleConstants(f, vp, opt);
-        void* p;
-        if (SUCCEEDED(cb_->Map(D3D10_MAP_WRITE_DISCARD, 0, &p))) { memcpy(p, &sc, sizeof(sc)); cb_->Unmap(); }
 
         dev_->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         dev_->IASetInputLayout(nullptr);
@@ -103,13 +100,19 @@ public:
         dev_->OMSetRenderTargets(1, &bbRtv_, nullptr);
         float black[4] = {0, 0, 0, 1};
         dev_->ClearRenderTargetView(bbRtv_, black);
-        D3D10_VIEWPORT v2 = {vp.x, vp.y, (UINT)vp.w, (UINT)vp.h, 0, 1};
-        dev_->RSSetViewports(1, &v2);
         dev_->PSSetShaderResources(2, 1, &frameSrv_);
         dev_->PSSetSamplers(0, 1, &samp_);
         dev_->PSSetConstantBuffers(0, 1, &cb_);
         dev_->PSSetShader(psScale_);
-        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) dev_->Draw(3, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+            for (const Region& rg : RegionsFor(vp, opt)) {
+                ScaleConstants sc = MakeScaleConstants(f, rg, opt);
+                void* p;
+                if (SUCCEEDED(cb_->Map(D3D10_MAP_WRITE_DISCARD, 0, &p))) { memcpy(p, &sc, sizeof(sc)); cb_->Unmap(); }
+                D3D10_VIEWPORT v2 = {rg.x, rg.y, (UINT)rg.w, (UINT)rg.h, 0, 1};
+                dev_->RSSetViewports(1, &v2);
+                dev_->Draw(3, 0);
+            }
         DrawOverlay(f, vp);
         return dxgi_.Present(opt.vsync);
     }

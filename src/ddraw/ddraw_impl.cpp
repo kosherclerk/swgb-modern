@@ -1,6 +1,7 @@
 // Software emulation of the DirectDraw 1 subset used by the Genie engine.
 #include "ddraw_impl.h"
 #include "capture.h"
+#include "zoom.h"
 #include <emmintrin.h>
 #include "presenter.h"
 #include "window.h"
@@ -706,7 +707,8 @@ HRESULT DDraw::EnumDisplayModes(DWORD, LPDDSURFACEDESC filter, LPVOID ctx, LPDDE
     if (!cb) return DDERR_INVALIDPARAMS;
     std::vector<std::pair<int, int>> modes = {{640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720},
                                               {1280, 1024}, {1366, 768}, {1600, 900}, {1600, 1200}, {1920, 1080}};
-    int cw = CfgInt("Display", "GameWidth", 0), ch = CfgInt("Display", "GameHeight", 0);
+    int cw = Zoom::InternalW(), ch = Zoom::InternalH();
+    if (cw <= 0 || ch <= 0) { cw = CfgInt("Display", "GameWidth", 0); ch = CfgInt("Display", "GameHeight", 0); }
     if (cw > 0 && ch > 0) modes.push_back({cw, ch});
     for (int bpp : {8, 16, 32}) {
         for (auto& m : modes) {

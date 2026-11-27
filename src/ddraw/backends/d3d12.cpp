@@ -144,14 +144,17 @@ public:
         list_->OMSetRenderTargets(1, &bbRtv, FALSE, nullptr);
         float black[4] = {0, 0, 0, 1};
         list_->ClearRenderTargetView(bbRtv, black, 0, nullptr);
-        D3D12_VIEWPORT v2 = {(float)vp.x, (float)vp.y, (float)vp.w, (float)vp.h, 0, 1};
-        D3D12_RECT s2 = {vp.x, vp.y, vp.x + vp.w, vp.y + vp.h};
-        list_->RSSetViewports(1, &v2);
-        list_->RSSetScissorRects(1, &s2);
-        ScaleConstants sc = MakeScaleConstants(f, vp, opt);
-        list_->SetGraphicsRoot32BitConstants(1, sizeof(sc) / 4, &sc, 0);
         list_->SetPipelineState(psoScale_);
-        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) list_->DrawInstanced(3, 1, 0, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+            for (const Region& rg : RegionsFor(vp, opt)) {
+                D3D12_VIEWPORT v2 = {(float)rg.x, (float)rg.y, (float)rg.w, (float)rg.h, 0, 1};
+                D3D12_RECT s2 = {rg.x, rg.y, rg.x + rg.w, rg.y + rg.h};
+                list_->RSSetViewports(1, &v2);
+                list_->RSSetScissorRects(1, &s2);
+                ScaleConstants sc = MakeScaleConstants(f, rg, opt);
+                list_->SetGraphicsRoot32BitConstants(1, sizeof(sc) / 4, &sc, 0);
+                list_->DrawInstanced(3, 1, 0, 0);
+            }
         DrawOverlay(f, vp);
         D3D12_RESOURCE_BARRIER b4 = Transition(bb_[bi], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         list_->ResourceBarrier(1, &b4);

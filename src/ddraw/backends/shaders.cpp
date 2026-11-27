@@ -22,6 +22,7 @@ cbuffer ScaleCB : register(b0) {
     int    filterMode;
     float  sharpness;
     float2 pad;
+    float4 uvRect;    // source rectangle (u0, v0, width, height)
 };
 
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -53,12 +54,12 @@ float4 PSOverlay(VSOut i) : SV_Target {
 }
 
 float4 PSScale(VSOut i) : SV_Target {
-    float2 uv = i.uv;
+    float2 uv = uvRect.xy + i.uv * uvRect.zw;
     if (filterMode == 0) return float4(Px(floor(uv * srcSize.xy)), 1);
     if (filterMode == 2) return float4(FrameTex.SampleLevel(LinearSamp, uv, 0).rgb, 1);
     // sharp bilinear
     float2 texel = uv * srcSize.xy;
-    float2 scale = max(floor(dstSize.xy * srcSize.zw), 1.0);
+    float2 scale = max(floor(dstSize.xy / (srcSize.xy * uvRect.zw) + 0.001), 1.0);   // + epsilon: GPU division is approximate
     float2 fl = floor(texel);
     float2 cd = frac(texel) - 0.5;
     float2 rr = 0.5 - 0.5 / scale;
@@ -110,11 +111,12 @@ void main() {
 const char* g_glslScaleFrag = R"GLSL(
 #ifdef SWGBM_VK
 layout(set = 0, binding = 0) uniform sampler2D FrameTex;
-layout(push_constant) uniform PC { vec4 srcSize; vec4 dstSize; int filterMode; float sharpness; vec2 pad; } pc;
+layout(push_constant) uniform PC { vec4 srcSize; vec4 dstSize; int filterMode; float sharpness; vec2 pad; vec4 uvRect; } pc;
 #define srcSize pc.srcSize
 #define dstSize pc.dstSize
 #define filterMode pc.filterMode
 #define sharpness pc.sharpness
+#define uvRect pc.uvRect
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
 #else
@@ -123,6 +125,7 @@ uniform vec4 srcSize;
 uniform vec4 dstSize;
 uniform int filterMode;
 uniform float sharpness;
+uniform vec4 uvRect;
 in vec2 vUV;
 out vec4 outColor;
 #endif
@@ -146,11 +149,11 @@ vec3 Lin(vec2 uv) {
 
 
 void main() {
-    vec2 uv = vUV;
+    vec2 uv = uvRect.xy + vUV * uvRect.zw;
     if (filterMode == 0) { outColor = vec4(Px(floor(uv * srcSize.xy)), 1.0); return; }
     if (filterMode == 2) { outColor = vec4(Lin(uv), 1.0); return; }
     vec2 texel = uv * srcSize.xy;
-    vec2 scale = max(floor(dstSize.xy * srcSize.zw), vec2(1.0));
+    vec2 scale = max(floor(dstSize.xy / (srcSize.xy * uvRect.zw) + 0.001), vec2(1.0));
     vec2 fl = floor(texel);
     vec2 cd = fract(texel) - 0.5;
     vec2 rr = 0.5 - 0.5 / scale;

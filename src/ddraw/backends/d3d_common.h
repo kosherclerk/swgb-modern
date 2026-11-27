@@ -40,14 +40,15 @@ inline bool CompileHlsl(ShaderBlobs& out, const char* vsProfile, const char* psP
            one("PSOverlay", psProfile, &out.psOverlay);
 }
 
-inline ScaleConstants MakeScaleConstants(const Frame& f, const Viewport& vp, const PresentOptions& opt) {
+inline ScaleConstants MakeScaleConstants(const Frame& f, const Region& r, const PresentOptions& opt) {
     ScaleConstants c = {};
     c.srcSize[0] = (float)f.width; c.srcSize[1] = (float)f.height;
     c.srcSize[2] = 1.0f / f.width; c.srcSize[3] = 1.0f / f.height;
-    c.dstSize[0] = (float)vp.w; c.dstSize[1] = (float)vp.h;
-    c.dstSize[2] = 1.0f / (vp.w ? vp.w : 1); c.dstSize[3] = 1.0f / (vp.h ? vp.h : 1);
-    c.filter = (int)opt.filter;
+    c.dstSize[0] = (float)r.w; c.dstSize[1] = (float)r.h;
+    c.dstSize[2] = 1.0f / (r.w ? r.w : 1); c.dstSize[3] = 1.0f / (r.h ? r.h : 1);
+    c.filter = (int)r.filter;
     c.sharpness = opt.sharpness;
+    c.uvRect[0] = r.u0; c.uvRect[1] = r.v0; c.uvRect[2] = r.u1 - r.u0; c.uvRect[3] = r.v1 - r.v0;
     return c;
 }
 

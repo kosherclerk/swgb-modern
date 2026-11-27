@@ -132,6 +132,12 @@
               <ComboBox Grid.Row="4" Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding PanelStyles}" SelectedValue="{Binding PanelStyle}"/>
             </Grid>
             <TextBlock Style="{StaticResource Hint}" Text="{Binding ResolutionSummary}"/>
+            <Grid Margin="0,4,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition/></Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource Label}" Text="Mouse-wheel zoom"/>
+              <ComboBox Grid.Column="1" HorizontalAlignment="Left" ItemsSource="{Binding ZoomChoices}" SelectedValue="{Binding ZoomOut}"/>
+            </Grid>
+            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Text="Zoom the battlefield with the mouse wheel, like newer RTS games (widescreen only). Zooming out shows more of the map; the game then draws a larger battlefield, which costs more CPU. The original sprites are only scaled, not redrawn."/>
 
             <TextBlock Style="{StaticResource Section}" Text="SCALING"/>
             <Grid>

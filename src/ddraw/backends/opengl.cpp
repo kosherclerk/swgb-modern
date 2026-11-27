@@ -85,6 +85,7 @@ public:
         uSrc_ = glGetUniformLocation(progScale_, "srcSize");
         uDst_ = glGetUniformLocation(progScale_, "dstSize");
         uFilter_ = glGetUniformLocation(progScale_, "filterMode");
+        uUv_ = glGetUniformLocation(progScale_, "uvRect");
         uSharp_ = glGetUniformLocation(progScale_, "sharpness");
         return glGetError() == GL_NO_ERROR;
     }
@@ -116,15 +117,19 @@ public:
         glViewport(0, 0, cw, ch);
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-        glViewport(vp.x, ch - vp.y - vp.h, vp.w, vp.h);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, frameTex_);
         glUseProgram(progScale_);
         glUniform4f(uSrc_, (float)f.width, (float)f.height, 1.0f / f.width, 1.0f / f.height);
-        glUniform4f(uDst_, (float)vp.w, (float)vp.h, 1.0f / vp.w, 1.0f / vp.h);
-        glUniform1i(uFilter_, (int)opt.filter);
         glUniform1f(uSharp_, opt.sharpness);
-        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+            for (const Region& rg : RegionsFor(vp, opt)) {
+                glViewport(rg.x, ch - rg.y - rg.h, rg.w, rg.h);
+                glUniform4f(uDst_, (float)rg.w, (float)rg.h, 1.0f / rg.w, 1.0f / rg.h);
+                glUniform1i(uFilter_, (int)rg.filter);
+                glUniform4f(uUv_, rg.u0, rg.v0, rg.u1 - rg.u0, rg.v1 - rg.v0);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
         DrawOverlay(f, vp, ch);
         SwapBuffers(dc_);
         GLenum e = glGetError();
@@ -214,7 +219,7 @@ private:
     GLuint progOverlay_ = 0, ovTex_ = 0;
     int ovW_ = 0, ovH_ = 0;
     GLuint progPal_ = 0, progScale_ = 0, vao_ = 0, fbo_ = 0, idxTex_ = 0, palTex_ = 0, frameTex_ = 0;
-    GLint uPalH_ = -1, uSrc_ = -1, uDst_ = -1, uFilter_ = -1, uSharp_ = -1;
+    GLint uPalH_ = -1, uSrc_ = -1, uDst_ = -1, uFilter_ = -1, uSharp_ = -1, uUv_ = -1;
     int fw_ = 0, fh_ = 0;
 };
 

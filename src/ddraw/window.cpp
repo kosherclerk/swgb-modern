@@ -8,6 +8,7 @@
 #include "presenter.h"
 #include "hook.h"
 #include "capture.h"
+#include "zoom.h"
 #include <windowsx.h>
 #include <algorithm>
 
@@ -17,6 +18,11 @@ namespace {
 HWND g_hwnd = nullptr;
 WNDPROC g_gameProc = nullptr;
 int g_gw = 800, g_gh = 600;
+// Zoom: the game runs larger than what is shown; window sizing, fonts and
+// mouse mapping work with the shown (display) size.
+bool Zoomed() { return Zoom::On() && g_gw == Zoom::InternalW() && g_gh == Zoom::InternalH(); }
+int ShownW() { return Zoomed() ? Zoom::DisplayW() : g_gw; }
+int ShownH() { return Zoomed() ? Zoom::DisplayH() : g_gh; }
 bool g_windowed = false;
 bool g_lockCursor = true;
 bool g_active = true;
@@ -64,7 +70,7 @@ HFONT ScaledFont(HFONT f) {
     static int n = 0;
     Viewport v = Presenter::Get().CurrentViewport();
     if (!f || g_gh <= 0 || v.h <= 0) return f;
-    int s1000 = (int)((int64_t)v.h * 1000 / g_gh);
+    int s1000 = (int)((int64_t)v.h * 1000 / ShownH());
     if (s1000 <= 1000) return f;
     for (int i = 0; i < n; i++) if (cache[i].src == f && cache[i].scale1000 == s1000) return cache[i].dst;
     LOGFONTA lf;
@@ -122,9 +128,10 @@ void ApplyWindowMode() {
         int mw = work.right - work.left, mh = work.bottom - work.top;
         if (ww <= 0 || wh <= 0) {
             // largest integer multiple of the game size that fits, else ~80% of work area
-            int s = std::max(1, std::min((mw - 40) / g_gw, (mh - 80) / g_gh));
-            ww = g_gw * s; wh = g_gh * s;
-            if (ww > mw || wh > mh || s == 1 && (g_gw * 1.3 < mw * 0.6)) { double f = std::min(mw * 0.8 / g_gw, mh * 0.8 / g_gh); ww = (int)(g_gw * f); wh = (int)(g_gh * f); }
+            int gw = ShownW(), gh = ShownH();
+            int s = std::max(1, std::min((mw - 40) / gw, (mh - 80) / gh));
+            ww = gw * s; wh = gh * s;
+            if (ww > mw || wh > mh || s == 1 && (gw * 1.3 < mw * 0.6)) { double f = std::min(mw * 0.8 / gw, mh * 0.8 / gh); ww = (int)(gw * f); wh = (int)(gh * f); }
         }
         DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN;
         SetWindowLongW(g_hwnd, GWL_STYLE, style);
@@ -293,6 +300,16 @@ LRESULT CALLBACK SubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         lp = MapMouseLParam(lp);
         break;
     case WM_MOUSEWHEEL: {
+        // zoom: the wheel is ours on the battlefield (the game has no use for it)
+        if (Zoomed()) {
+            static int acc = 0;
+            acc += GET_WHEEL_DELTA_WPARAM(wp);
+            int notches = acc / WHEEL_DELTA;
+            acc -= notches * WHEEL_DELTA;
+            Zoom::OnWheel(notches);
+            Presenter::Get().FrameReady(false);
+            return 0;
+        }
         POINT p = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         pScreenToClient(h, &p);
         int x = p.x, y = p.y;
@@ -381,6 +398,13 @@ bool Window::IsActive() { return g_active; }
 void Window::ClientToGame(int& x, int& y) {
     Viewport v = Presenter::Get().CurrentViewport();
     if (v.w <= 0 || v.h <= 0) return;
+    if (Zoomed()) {   // window -> shown image -> battlefield crop or panel
+        float dx = (float)(x - v.x) * Zoom::DisplayW() / v.w, dy = (float)(y - v.y) * Zoom::DisplayH() / v.h;
+        dx = std::max(0.0f, std::min((float)Zoom::DisplayW() - 1, dx));
+        dy = std::max(0.0f, std::min((float)Zoom::DisplayH() - 1, dy));
+        Zoom::DisplayToGame(dx, dy, x, y);
+        return;
+    }
     x = (int)((int64_t)(x - v.x) * g_gw / v.w);
     y = (int)((int64_t)(y - v.y) * g_gh / v.h);
     x = std::max(0, std::min(g_gw - 1, x));
@@ -390,6 +414,13 @@ void Window::ClientToGame(int& x, int& y) {
 void Window::GameToClient(int& x, int& y) {
     Viewport v = Presenter::Get().CurrentViewport();
     if (g_gw <= 0 || g_gh <= 0) return;
+    if (Zoomed()) {
+        float dx, dy;
+        Zoom::GameToDisplay((float)x, (float)y, dx, dy);
+        x = v.x + (int)(dx * v.w / Zoom::DisplayW() + 0.5f);
+        y = v.y + (int)(dy * v.h / Zoom::DisplayH() + 0.5f);
+        return;
+    }
     x = v.x + (int)(((int64_t)x * v.w + v.w / 2) / g_gw);
     y = v.y + (int)(((int64_t)y * v.h + v.h / 2) / g_gh);
 }

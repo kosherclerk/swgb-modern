@@ -1,5 +1,6 @@
 // Engine patches applied in memory to known executables only.
 #include "patches.h"
+#include "zoom.h"
 #include "hook.h"
 #include "resources.h"
 #include "effects.h"
@@ -177,12 +178,13 @@ void ApplyEngine(const ExeLayout& L) {
     ApplyFrameRate(L);
     ApplySmoothScroll(L);
     Effects::InstallEngineHooks(L.blitter, L.blitState);
-    int W = CfgInt("Display", "GameWidth", 0), H = CfgInt("Display", "GameHeight", 0);
+    Zoom::Init();
+    int W = Zoom::InternalW(), H = Zoom::InternalH();   // == GameWidth x GameHeight unless zooming
     bool widescreen = CfgBool("Fixes", "Widescreen", true) && W >= 800 && H >= 600 && !(W == 1280 && H == 1024);
     static const uint8_t resPrologue[] = {0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x0C};
     // The resource hook serves the widescreen layout table and panels.
     if (widescreen)
-        Resources::Install(L.resGetter, L.gameFree, L.gameMalloc, resPrologue, sizeof(resPrologue), widescreen ? W : 0, widescreen ? H : 0,
+        Resources::Install(L.resGetter, L.gameFree, L.gameMalloc, resPrologue, sizeof(resPrologue), widescreen ? W : 0, widescreen ? H : 0, Zoom::DisplayW(),
                            widescreen ? std::initializer_list<uint32_t>{L.layoutTableId} : std::initializer_list<uint32_t>{});
     if (!widescreen) return;
     // Registry "Screen Size" == 1280 -> custom W x H.

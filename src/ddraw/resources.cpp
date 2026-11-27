@@ -23,7 +23,8 @@ typedef void(__cdecl* FreeFn)(void*);
 FreeFn g_gameFree = nullptr; // the engine's own CRT free()
 typedef void*(__cdecl* MallocFn)(size_t);
 MallocFn g_gameMalloc = nullptr; // and malloc()
-int g_W = 0, g_H = 0;
+int g_W = 0, g_H = 0;   // game (internal) size
+int g_PW = 0;           // panel width (the display width; == g_W unless zooming)
 std::vector<uint32_t> g_layoutIds;
 CRITICAL_SECTION g_lock;
 std::map<uint64_t, std::string> g_cache;
@@ -52,9 +53,11 @@ PanelGeom Geom() {
             CfgInt("Widescreen", "PanelZoneRight", 690)};
 }
 
-std::string RewriteLayout(const std::string& src, int W, int H) {
+std::string RewriteLayout(const std::string& src, int W, int H, int PW) {
+    // W x H: the game's size; the panel and its controls span PW (the display
+    // width), the battlefield W. They differ only with mouse-wheel zoom on.
     const PanelGeom g = Geom();
-    const int extra = W - 1280, dx = extra / 2, dy = H - 1024;
+    const int extra = PW - 1280, dx = extra / 2, dy = H - 1024;
     std::string out;
     bool inRes = false;
     size_t a = 0;
@@ -201,6 +204,10 @@ void LoadPalette() {
 }
 
 void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* size) {
+    // Above 1280-class sizes (a zoomed-out battlefield) the engine asks for a
+    // fourth panel set (51151..51158) that the game does not have: serve the
+    // 1280 panels (51141..51148), widened like the others.
+    if (type == 0x736c7020 /* 'slp ' */ && g_W > 0 && id >= 51151 && id <= 51158) id -= 10;
     void* p = g_orig(type, id, allocFlag, size);
     if (!p) return p;
     if (type == 0x736c7020 /* 'slp ' */ && g_W > 0 && id >= 51141 && id <= 51148) {
@@ -208,7 +215,7 @@ void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* siz
         uint64_t key = ((uint64_t)type << 32) | id;
         auto it = g_cache.find(key);
         if (it == g_cache.end()) {
-            std::string w = WidenPanel((const uint8_t*)p, (size_t)*size, g_W, g_H);
+            std::string w = WidenPanel((const uint8_t*)p, (size_t)*size, g_PW, g_H);
             LOG("widescreen: panel slp %u -> %s", id, w.empty() ? "unchanged (decode failed)" : "widened");
             it = g_cache.emplace(key, w).first;
         }
@@ -226,7 +233,7 @@ void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* siz
         auto it = g_cache.find(key);
         if (it == g_cache.end()) {
             std::string src((const char*)p, (size_t)*size);
-            it = g_cache.emplace(key, RewriteLayout(src, g_W, g_H)).first;
+            it = g_cache.emplace(key, RewriteLayout(src, g_W, g_H, g_PW)).first;
         }
         std::string copy = it->second;
         LeaveCriticalSection(&g_lock);
@@ -238,10 +245,10 @@ void* __fastcall ResGetHook(uint32_t type, uint32_t id, int* allocFlag, int* siz
 
 } // namespace
 
-bool Resources::Install(uintptr_t getter, uintptr_t gameFree, uintptr_t gameMalloc, const uint8_t* prologue, size_t prologueLen, int W, int H,
+bool Resources::Install(uintptr_t getter, uintptr_t gameFree, uintptr_t gameMalloc, const uint8_t* prologue, size_t prologueLen, int W, int H, int PW,
                         std::initializer_list<uint32_t> layoutIds) {
     InitializeCriticalSection(&g_lock);
-    g_W = W; g_H = H;
+    g_W = W; g_H = H; g_PW = PW > 0 ? PW : W;
     g_gameFree = (FreeFn)gameFree;
     g_gameMalloc = (MallocFn)gameMalloc;
     g_layoutIds.assign(layoutIds);

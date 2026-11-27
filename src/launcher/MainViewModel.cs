@@ -143,6 +143,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int CustomHeight { get => _customHeight; set => Set(ref _customHeight, value); }
     private string _panelStyle = "stretch";
     public string PanelStyle { get => _panelStyle; set => Set(ref _panelStyle, value); }
+    public List<Choice> ZoomChoices { get; } = new() { new("off", "Off"), new("85", "Up to 85% (zoom out a little)"), new("70", "Up to 70%"), new("60", "Up to 60% (most map, most CPU)") };
+    private string _zoomOut = "off";
+    public string ZoomOut { get => _zoomOut; set => Set(ref _zoomOut, value); }
 
     public (int W, int H) EffectiveResolution()
     {
@@ -259,6 +262,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CustomWidth = ini.GetInt("Display", "GameWidth", 1920);
         CustomHeight = ini.GetInt("Display", "GameHeight", 1080);
         PanelStyle = Pick(PanelStyles, ini.GetString("Widescreen", "PanelStyle", "stretch"), "stretch");
+        ZoomOut = ini.GetBool("Zoom", "Enabled", false) ? Pick(ZoomChoices, ini.GetString("Zoom", "MaxOut", "70"), "70") : "off";
         GameFps = ini.GetInt("Fixes", "GameFPS", 60);
         MinimapMs = ini.GetInt("Fixes", "MinimapRefreshMs", 100);
         IdleCpu = ini.GetBool("Fixes", "IdleCPU", true);
@@ -319,6 +323,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Display", "GameHeight", widescreen ? h : 0);
         ini.Set("Fixes", "Widescreen", widescreen);
         ini.Set("Widescreen", "PanelStyle", PanelStyle);
+        ini.Set("Zoom", "Enabled", ZoomOut != "off");
+        if (ZoomOut != "off") ini.Set("Zoom", "MaxOut", ZoomOut);
         ini.Set("Fixes", "GameFPS", GameFps);
         ini.Set("Fixes", "MinimapRefreshMs", MinimapMs);
         ini.Set("Fixes", "IdleCPU", IdleCpu);

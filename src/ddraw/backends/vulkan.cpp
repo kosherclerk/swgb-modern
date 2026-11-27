@@ -242,17 +242,21 @@ public:
         vkCmdBeginRenderPass(cmd_, &rb, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeScale_);
         vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, layoutScale_, 0, 1, &setScale_, 0, nullptr);
-        VkViewport v2 = {(float)vp.x, (float)vp.y, (float)vp.w, (float)vp.h, 0, 1};
-        VkRect2D s2 = {{vp.x, vp.y}, {(uint32_t)vp.w, (uint32_t)vp.h}};
-        vkCmdSetViewport(cmd_, 0, 1, &v2);
-        vkCmdSetScissor(cmd_, 0, 1, &s2);
-        ScaleConstants sc = {};
-        sc.srcSize[0] = (float)f.width; sc.srcSize[1] = (float)f.height; sc.srcSize[2] = 1.0f / f.width; sc.srcSize[3] = 1.0f / f.height;
-        sc.dstSize[0] = (float)vp.w; sc.dstSize[1] = (float)vp.h; sc.dstSize[2] = 1.0f / vp.w; sc.dstSize[3] = 1.0f / vp.h;
-        sc.filter = (int)opt.filter;
-        sc.sharpness = opt.sharpness;
-        vkCmdPushConstants(cmd_, layoutScale_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(sc), &sc);
-        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) vkCmdDraw(cmd_, 3, 1, 0, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+            for (const Region& rg : RegionsFor(vp, opt)) {
+                VkViewport v2 = {(float)rg.x, (float)rg.y, (float)rg.w, (float)rg.h, 0, 1};
+                VkRect2D s2 = {{std::max(0, rg.x), std::max(0, rg.y)}, {(uint32_t)rg.w, (uint32_t)rg.h}};
+                vkCmdSetViewport(cmd_, 0, 1, &v2);
+                vkCmdSetScissor(cmd_, 0, 1, &s2);
+                ScaleConstants sc = {};
+                sc.srcSize[0] = (float)f.width; sc.srcSize[1] = (float)f.height; sc.srcSize[2] = 1.0f / f.width; sc.srcSize[3] = 1.0f / f.height;
+                sc.dstSize[0] = (float)rg.w; sc.dstSize[1] = (float)rg.h; sc.dstSize[2] = 1.0f / rg.w; sc.dstSize[3] = 1.0f / rg.h;
+                sc.filter = (int)rg.filter;
+                sc.sharpness = opt.sharpness;
+                sc.uvRect[0] = rg.u0; sc.uvRect[1] = rg.v0; sc.uvRect[2] = rg.u1 - rg.u0; sc.uvRect[3] = rg.v1 - rg.v0;
+                vkCmdPushConstants(cmd_, layoutScale_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(sc), &sc);
+                vkCmdDraw(cmd_, 3, 1, 0, 0);
+            }
         if (drawOverlay) DrawOverlay(f, vp);
         vkCmdEndRenderPass(cmd_);
         vkEndCommandBuffer(cmd_);

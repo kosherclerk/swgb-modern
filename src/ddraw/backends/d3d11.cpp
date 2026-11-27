@@ -92,8 +92,6 @@ public:
             memcpy(ms.pData, f.palette, 1024);
             ctx_->Unmap(palTex_, 0);
         }
-        ScaleConstants sc = MakeScaleConstants(f, vp, opt);
-        if (SUCCEEDED(ctx_->Map(cb_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) { memcpy(ms.pData, &sc, sizeof(sc)); ctx_->Unmap(cb_, 0); }
 
         ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx_->IASetInputLayout(nullptr);
@@ -113,13 +111,18 @@ public:
         ctx_->OMSetRenderTargets(1, &bbRtv_, nullptr);
         float black[4] = {0, 0, 0, 1};
         ctx_->ClearRenderTargetView(bbRtv_, black);
-        D3D11_VIEWPORT v2 = {(float)vp.x, (float)vp.y, (float)vp.w, (float)vp.h, 0, 1};
-        ctx_->RSSetViewports(1, &v2);
         ctx_->PSSetShaderResources(2, 1, &frameSrv_);
         ctx_->PSSetSamplers(0, 1, &samp_);
         ctx_->PSSetConstantBuffers(0, 1, &cb_);
         ctx_->PSSetShader(psScale_, nullptr, 0);
-        if (!(overlay_ && overlay_->visible && overlay_->hideFrame)) ctx_->Draw(3, 0);
+        if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+            for (const Region& rg : RegionsFor(vp, opt)) {
+                ScaleConstants sc = MakeScaleConstants(f, rg, opt);
+                if (SUCCEEDED(ctx_->Map(cb_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) { memcpy(ms.pData, &sc, sizeof(sc)); ctx_->Unmap(cb_, 0); }
+                D3D11_VIEWPORT v2 = {(float)rg.x, (float)rg.y, (float)rg.w, (float)rg.h, 0, 1};
+                ctx_->RSSetViewports(1, &v2);
+                ctx_->Draw(3, 0);
+            }
         DrawOverlay(f, vp);
         return dxgi_.Present(opt.vsync);
     }

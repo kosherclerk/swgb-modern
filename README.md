@@ -12,6 +12,7 @@ A compatibility and enhancement mod for **Star Wars: Galactic Battlegrounds** (b
 - **True widescreen in game** (for example 1920×1080). The game's own UI layout is rebuilt for the new width: the command panel stretches like Expanding Fronts' (ornaments, buttons and emblems keep their shape; the frame, background and Tech Level bar get longer), or you can keep the original panel centred. Menus remain 800×600 and are scaled.
 - **UI scaling**: choose your native resolution and a scale factor. The launcher shows which scales are pixel-perfect and which one is closest to the original interface size. Per-monitor DPI aware.
 - **Upscaling filters**: Nearest (lossless), Sharp (crisp pixels, blended edges at non-integer scales) and Bilinear (soft).
+- **Mouse-wheel zoom** (optional, Display tab): zoom the battlefield out to 85/70/60% or in up to 125%, like newer RTS games. The command panel keeps its size. The original sprites are scaled, not redrawn, and zooming out costs more CPU because the game draws a larger battlefield.
 - **Smooth camera**: scrolling moves the view a little every frame instead of jumping half a tile 20 times a second, at the same speed.
 - **Smoother rendering**: units move and the battlefield is redrawn up to 60 times per second instead of 20 (the same world-update change Expanding Fronts makes), and the minimap 10 times per second instead of 3. **Game speed is unchanged**, because units move by elapsed time (verified with the in-game clock).
 - Frame limiter tied to the monitor's refresh rate, plus VSync with tearing support. Unchanged frames are not re-presented, so the mod adds little CPU load.
@@ -62,6 +63,7 @@ All settings are in `Game\SWGBModern.ini` (edited by the launcher; manual edits 
 | `[Fixes] GameFPS` | battlefield redraw rate (original 20) |
 | `[Audio] Resampler` | `sinc`, `cubic`, `linear` |
 | `[Enhancements] HDText / SmoothFog` | `0` / `1` |
+| `[Zoom] Enabled / MaxOut / MaxIn` | `0` / `70` / `125` |
 | `[Video] PlayIntro` | `0` / `1` |
 | `[Debug] Diagnostics / CaptureKey` | `0` / `1`, default key `ctrl+shift+f12` |
 

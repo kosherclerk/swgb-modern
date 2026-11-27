@@ -60,6 +60,8 @@ public:
     bool Present(const Frame& f, const Viewport& vp, int cw, int ch, const PresentOptions& opt) override {
         if (vp.w <= 0 || vp.h <= 0) return true;
         Filter mode = opt.filter == Filter::Bilinear ? Filter::Bilinear : opt.filter == Filter::Nearest ? Filter::Nearest : Filter::Sharp;
+        const bool regions = !opt.regions.empty();   // zoom: convert at game size, GDI scales each region
+        if (regions) mode = Filter::Bilinear;
         int k = std::max(1, std::min(vp.w / f.width, vp.h / f.height)); // integer prescale (Sharp)
         int tw, th;
         if (mode == Filter::Nearest) { tw = vp.w; th = vp.h; }
@@ -99,6 +101,26 @@ public:
         if (!dc) return true;
         HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
         RECT r;
+        if (regions) {
+            // the regions cover the viewport: paint only the margins (no flash of black)
+            if (vp.y > 0) { r = {0, 0, cw, vp.y}; FillRect(dc, &r, black); }
+            if (vp.y + vp.h < ch) { r = {0, vp.y + vp.h, cw, ch}; FillRect(dc, &r, black); }
+            if (vp.x > 0) { r = {0, vp.y, vp.x, vp.y + vp.h}; FillRect(dc, &r, black); }
+            if (vp.x + vp.w < cw) { r = {vp.x + vp.w, vp.y, cw, vp.y + vp.h}; FillRect(dc, &r, black); }
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, nullptr);
+            if (!(overlay_ && overlay_->visible && overlay_->hideFrame))
+                for (const Region& rg : opt.regions)
+                    StretchBlt(dc, rg.x, rg.y, rg.w, rg.h, buf_.dc, (int)(rg.u0 * tw + 0.5f), (int)(rg.v0 * th + 0.5f),
+                               (int)((rg.u1 - rg.u0) * tw + 0.5f), (int)((rg.v1 - rg.v0) * th + 0.5f), SRCCOPY);
+            DrawOverlay(dc, f, vp);
+            ReleaseDC(hwnd_, dc);
+            if (opt.vsync) {
+                static auto flush2 = (HRESULT(WINAPI*)())GetProcAddress(LoadLibraryW(L"dwmapi.dll"), "DwmFlush");
+                if (flush2) flush2();
+            }
+            return true;
+        }
         if (vp.y > 0) { r = {0, 0, cw, vp.y}; FillRect(dc, &r, black); }
         if (vp.y + vp.h < ch) { r = {0, vp.y + vp.h, cw, ch}; FillRect(dc, &r, black); }
         if (vp.x > 0) { r = {0, vp.y, vp.x, vp.y + vp.h}; FillRect(dc, &r, black); }
