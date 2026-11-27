@@ -1,5 +1,6 @@
 // Software emulation of the DirectDraw 1 subset used by the Genie engine.
 #include "ddraw_impl.h"
+#include "capture.h"
 #include <emmintrin.h>
 #include "presenter.h"
 #include "window.h"
@@ -25,7 +26,10 @@ struct Lock_ {
     ~Lock_() { LeaveCriticalSection(&State().lock); }
 };
 
-static void NotifyPrimaryChanged(bool flip) { Presenter::Get().FrameReady(flip); }
+static void NotifyPrimaryChanged(bool flip) {
+    if (flip) Capture::OnGameFrame();
+    Presenter::Get().FrameReady(flip);
+}
 
 // Copy one row to the screen surface, writing only the 16-byte blocks that
 // differ; returns whether anything changed. One pass instead of a copy here

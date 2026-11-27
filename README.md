@@ -63,8 +63,13 @@ All settings are in `Game\SWGBModern.ini` (edited by the launcher; manual edits 
 | `[Audio] Resampler` | `sinc`, `cubic`, `linear` |
 | `[Enhancements] HDText / SmoothFog` | `0` / `1` |
 | `[Video] PlayIntro` | `0` / `1` |
+| `[Debug] Diagnostics / CaptureKey` | `0` / `1`, default key `ctrl+shift+f12` |
 
 Renderer changes apply the next time the game starts. Filter, scaling, window mode, VSync and frame limit apply immediately when the launcher saves.
+
+## Diagnostics
+
+Turn on **Diagnostics** on the launcher's Mod tab. The log (`SWGBModern.log` in the game folder) then gets one line per second with the game's and the display's frame rates, the longest frame gap, CPU and memory, plus a `stutter` line whenever the game's frame loop stalls. Press **Ctrl+Shift+F12** while playing to save the 3 seconds before and after the key press to `Game\SWGBModern\captures\<date_time>\`: `clip.avi` (Motion-JPEG video), `frames\*.png` (4 stills per second), `screenshot.png` and `summary.txt` (stats, settings and the end of the log). Open the folder with **Open captures**.
 
 ## How it works
 

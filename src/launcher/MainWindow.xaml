@@ -223,6 +223,12 @@
               <Button Content="Check for updates now" Click="Update_Click"/>
               <Button Content="Project page" Click="Project_Click"/>
             </StackPanel>
+            <TextBlock Style="{StaticResource Section}" Text="DIAGNOSTICS"/>
+            <CheckBox Content="Diagnostics: detailed log and the capture key" IsChecked="{Binding Diagnostics}"/>
+            <TextBlock Style="{StaticResource Hint}" Margin="22,0,0,6" TextWrapping="Wrap" Text="While playing, press Ctrl+Shift+F12 to save the 3 seconds before and after as a video, stills and a screenshot, plus a summary with stats and the log. The log gets one line per second with frame rates, stutters, CPU and memory. Uses a little extra CPU while on."/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+              <Button Content="Open captures" Click="OpenCaptures_Click"/>
+            </StackPanel>
             <TextBlock Style="{StaticResource Section}" Text="TROUBLESHOOTING"/>
             <StackPanel Orientation="Horizontal">
               <Button Content="Open log" Click="OpenLog_Click"/>

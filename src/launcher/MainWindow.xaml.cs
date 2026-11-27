@@ -163,6 +163,13 @@ public partial class MainWindow : Window
         var d = Path.Combine(_vm.GameDir, "CrashDumps");
         if (Directory.Exists(d)) Shell(d); else MessageBox.Show(this, "No crashes recorded.", "SWGB Modern");
     }
+    private void OpenCaptures_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.GameDir == null) return;
+        var d = Path.Combine(_vm.GameDir, "SWGBModern", "captures");
+        if (Directory.Exists(d)) Shell(d);
+        else MessageBox.Show(this, "No captures yet. Turn on Diagnostics, play, and press Ctrl+Shift+F12.", "SWGB Modern");
+    }
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.GameDir == null) return;

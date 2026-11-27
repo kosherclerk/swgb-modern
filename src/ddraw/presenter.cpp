@@ -1,6 +1,7 @@
 #include "presenter.h"
 #include "ddraw_impl.h"
 #include "window.h"
+#include "capture.h"
 #include <algorithm>
 #include <math.h>
 
@@ -195,6 +196,9 @@ void Presenter::Run() {
     iniTime = iniStamp();
     DWORD lastIniCheck = GetTickCount();
     LOG("frame limiter: %d fps%s", maxFps, maxFps ? "" : " (off)");
+    Capture::Init();
+    int totalShown = 0, totalNew = 0;
+    double lastPresentMs = 0;
     int dumpEvery = CfgInt("Debug", "DumpFrameSeconds", 0);
     DWORD lastDump = GetTickCount();
 
@@ -252,6 +256,11 @@ void Presenter::Run() {
             }
         }
         if (!have || !r) continue;
+        if (Capture::Enabled()) {
+            Capture::OnFrame(frame);
+            Capture::Tick(hwnd_, totalShown, totalNew, lastPresentMs);
+            lastPresentMs = 0;
+        }
 
         RECT rc;
         GetClientRect(hwnd_, &rc);
@@ -300,10 +309,12 @@ void Presenter::Run() {
         gameW_ = frame.width; gameH_ = frame.height;
         LeaveCriticalSection(&vpLock_);
 
-        if (show->Dirty()) uniqueFrames++;
+        if (show->Dirty()) { uniqueFrames++; totalNew++; }
         QueryPerformanceCounter(&tC);
         bool presOk = r->Present(*show, vp, rc.right, rc.bottom, opt);
         QueryPerformanceCounter(&tD); tPres += tD.QuadPart - tC.QuadPart;
+        lastPresentMs += (tD.QuadPart - tC.QuadPart) * 1000.0 / freq.QuadPart;
+        totalShown++;
         if (!presOk) {
             LOG("Renderer %s: present failed, recreating", r->Name());
             r.reset();

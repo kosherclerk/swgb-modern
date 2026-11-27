@@ -174,6 +174,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsolateVolume { get => _isolateVolume; set => Set(ref _isolateVolume, value); }
     public bool CrashDumps { get => _crashDumps; set => Set(ref _crashDumps, value); }
     public bool Log { get => _log; set => Set(ref _log, value); }
+    private bool _diagnostics;
+    public bool Diagnostics { get => _diagnostics; set { Set(ref _diagnostics, value); if (value) Log = true; } }
     public bool LargeAddressAware { get => Prefs.LargeAddressAware; set { Prefs.LargeAddressAware = value; On(); } }
     public bool CheckUpdates { get => Prefs.CheckUpdates; set { Prefs.CheckUpdates = value; On(); } }
 
@@ -267,6 +269,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Limiter = ini.GetBool("Audio", "Limiter", true);
         AudioEnabled = ini.GetBool("Audio", "Enabled", true);
         Log = ini.GetBool("Debug", "Log", false);
+        Diagnostics = ini.GetBool("Debug", "Diagnostics", false);
         HdText = ini.GetBool("Enhancements", "HDText", false);
         SmoothFog = ini.GetBool("Enhancements", "SmoothFog", false);
         PlayIntro = ini.GetBool("Video", "PlayIntro", true);
@@ -325,7 +328,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ini.Set("Audio", "Volume", Volume);
         ini.Set("Audio", "LatencyMs", Latency);
         ini.Set("Audio", "Limiter", Limiter);
-        ini.Set("Debug", "Log", Log);
+        ini.Set("Debug", "Log", Log || Diagnostics);
+        ini.Set("Debug", "Diagnostics", Diagnostics);
         ini.Set("Enhancements", "HDText", HdText);
         ini.Set("Enhancements", "SmoothFog", SmoothFog);
         ini.Set("Video", "PlayIntro", PlayIntro);

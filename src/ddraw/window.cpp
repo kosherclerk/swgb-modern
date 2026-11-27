@@ -7,6 +7,7 @@
 #include "window.h"
 #include "presenter.h"
 #include "hook.h"
+#include "capture.h"
 #include <windowsx.h>
 #include <algorithm>
 
@@ -272,6 +273,7 @@ LPARAM MapMouseLParam(LPARAM lp) {
 }
 
 LRESULT CALLBACK SubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (Capture::IsHotkeyMessage(msg, wp)) return 0;   // the recorder polls the key itself
     if (msg == WM_TIMER && wp == 1 && LogEnabled()) {
         static DWORD n = 0, t0 = GetTickCount();
         n++;
