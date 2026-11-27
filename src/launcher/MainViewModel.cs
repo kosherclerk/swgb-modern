@@ -20,6 +20,7 @@ public sealed class LauncherPrefs
     public bool LargeAddressAware { get; set; }
     public bool SkipIntro { get; set; } = true;
     public bool CheckUpdates { get; set; } = true;
+    public bool CloseOnPlay { get; set; }
     public string ResolutionMode { get; set; } = "auto";   // auto | classic | custom
     public int NativeW { get; set; }                        // 0 = detect
     public int NativeH { get; set; }
@@ -211,6 +212,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool Diagnostics { get => _diagnostics; set { Set(ref _diagnostics, value); if (value) Log = true; } }
     public bool LargeAddressAware { get => Prefs.LargeAddressAware; set { Prefs.LargeAddressAware = value; On(); } }
     public bool CheckUpdates { get => Prefs.CheckUpdates; set { Prefs.CheckUpdates = value; On(); } }
+    public bool CloseOnPlay { get => Prefs.CloseOnPlay; set { Prefs.CloseOnPlay = value; On(); } }
 
     // ---------------------------------------------------------------- components
     // Core components keep the original look; enhancements change it and are

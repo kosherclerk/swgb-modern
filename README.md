@@ -41,7 +41,7 @@ The mod ships no replacement art: everything on screen comes from your copy of t
 2. Put it anywhere (the game folder is convenient) and run it. It finds GOG, Steam and retail installations, or you can choose the folder.
 3. Pick your settings and press **PLAY**. The mod installs itself on first launch.
 
-**Uninstall:** use the launcher's *Uninstall* button. It removes the mod's files and restores anything it replaced. **Update:** the launcher checks GitHub Releases and updates itself.
+**Uninstall:** use the launcher's *Uninstall* button. It removes the mod's files and restores anything it replaced. **Update:** the launcher checks GitHub Releases and updates itself. To go back to an earlier version, use *Choose version...* on the Mod tab. Only one launcher runs at a time, and it can close itself when the game starts (Play tab).
 
 The mod is just two DLLs (`ddraw.dll`, `dsound.dll`) and `SWGBModern.ini` next to the game executable, so it also works when the game is started from GOG Galaxy or Steam.
 

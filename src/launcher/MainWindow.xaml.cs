@@ -134,7 +134,8 @@ public partial class MainWindow : Window
             };
             Process.Start(psi);
             _vm.Status = $"Started {_vm.SelectedGame.Name}.";
-            WindowState = WindowState.Minimized;
+            if (_vm.CloseOnPlay) Close();   // settings are saved on closing
+            else WindowState = WindowState.Minimized;
         }
         catch (Exception ex) { Error("Could not start the game", ex); }
     }
@@ -195,6 +196,79 @@ public partial class MainWindow : Window
     }
 
     private async void Update_Click(object sender, RoutedEventArgs e) => await CheckForUpdates(interactive: true);
+
+    /// <summary>Install any published version (rollback or update).</summary>
+    private async void Versions_Click(object sender, RoutedEventArgs e)
+    {
+        List<ReleaseInfo> all;
+        try
+        {
+            _vm.Status = "Loading the list of versions...";
+            all = await Updater.AllAsync();
+            _vm.Status = "";
+        }
+        catch (Exception ex) { _vm.Status = "Could not load the versions."; Error("Could not load the list of versions", ex); return; }
+        if (all.Count == 0) { MessageBox.Show(this, "No versions found.", "SWGB Modern"); return; }
+
+        var list = new System.Windows.Controls.ListBox { Height = 260, Margin = new Thickness(0, 8, 0, 8) };
+        foreach (var r in all)
+        {
+            string label = $"{r.Tag}   {(r.Published == default ? "" : r.Published.ToLocalTime().ToString("yyyy-MM-dd"))}" +
+                           (Updater.SameVersion(r) ? "   (installed)" : Updater.IsNewer(r) ? "   (newer)" : "");
+            list.Items.Add(new System.Windows.Controls.ListBoxItem { Content = label, Tag = r });
+        }
+        list.SelectedIndex = 0;
+        var field = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x16, 0x1B, 0x24));
+        list.Background = field; list.Foreground = Foreground;
+        var notes = new System.Windows.Controls.TextBox
+        {
+            Height = 150, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+        };
+        notes.Background = field; notes.Foreground = Foreground;
+        list.SelectionChanged += (_, _) => notes.Text = (list.SelectedItem as System.Windows.Controls.ListBoxItem)?.Tag is ReleaseInfo r ? r.Notes : "";
+        notes.Text = all[0].Notes;
+        var install = new System.Windows.Controls.Button { Content = "Install selected version", IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new System.Windows.Controls.Button { Content = "Cancel", IsCancel = true };
+        var buttons = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(install); buttons.Children.Add(cancel);
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = $"You have {_vm.Version}. Choose a version to install: the launcher replaces itself, restarts and installs that version's files into the game. Your settings are kept.",
+        });
+        panel.Children.Add(list);
+        panel.Children.Add(notes);
+        panel.Children.Add(new System.Windows.Controls.Border { Height = 10 });
+        panel.Children.Add(buttons);
+        var dlg = new Window
+        {
+            Title = "SWGB Modern - choose version", Owner = this, Content = panel, Width = 560, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
+            Background = Background, Foreground = Foreground,
+        };
+        ReleaseInfo? pick = null;
+        install.Click += (_, _) => { pick = (list.SelectedItem as System.Windows.Controls.ListBoxItem)?.Tag as ReleaseInfo; dlg.DialogResult = pick != null; };
+        if (dlg.ShowDialog() != true || pick == null) return;
+        if (Updater.SameVersion(pick)) { _vm.Status = $"{pick.Tag} is already installed."; return; }
+        if (!Updater.IsNewer(pick))
+        {
+            var ok = MessageBox.Show(this,
+                $"Install the older version {pick.Tag}?\n\nAutomatic update checks will be turned off so it does not offer to update again at every start. " +
+                "You can turn them back on (Mod tab), or use Check for updates / Choose version at any time.",
+                "Install an older version", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (ok != MessageBoxResult.OK) return;
+            _vm.CheckUpdates = false;
+        }
+        try
+        {
+            _vm.SaveAll();
+            _vm.Status = $"Downloading {pick.Tag}...";
+            await Updater.DownloadAndRestartAsync(pick, new Progress<double>(p => _vm.Status = $"Downloading {pick.Tag}... {p:P0}"));
+        }
+        catch (Exception ex) { _vm.Status = "Install failed."; Error($"Could not install {pick.Tag}", ex); }
+    }
     private void Project_Click(object sender, RoutedEventArgs e) => Shell($"https://github.com/{Updater.Repository}");
 
     private async Task CheckForUpdates(bool interactive)

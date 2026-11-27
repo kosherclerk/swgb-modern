@@ -53,6 +53,7 @@
             </StackPanel>
             <TextBlock Style="{StaticResource Section}" Text="LAUNCH OPTIONS"/>
             <CheckBox Content="Play the intro videos" IsChecked="{Binding PlayIntro}"/>
+            <CheckBox Content="Close the launcher when the game starts" IsChecked="{Binding CloseOnPlay}"/>
             <CheckBox Content="Use 4 GB memory mode (Large Address Aware copy of the game executable)" IsChecked="{Binding LargeAddressAware}"/>
             <TextBlock Style="{StaticResource Hint}" Text="Creates '&lt;game&gt;.4gb.exe' next to the original and launches that instead. The original executable is never modified. Windows Firewall may ask once for the new file."/>
           </StackPanel>
@@ -237,6 +238,7 @@
             <CheckBox Content="Check for updates when the launcher starts" IsChecked="{Binding CheckUpdates}"/>
             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
               <Button Content="Check for updates now" Click="Update_Click"/>
+              <Button Content="Choose version..." Click="Versions_Click"/>
               <Button Content="Project page" Click="Project_Click"/>
             </StackPanel>
             <TextBlock Style="{StaticResource Section}" Text="DIAGNOSTICS"/>
