@@ -190,11 +190,33 @@ DDSurface::DDSurface(int w, int h, DWORD caps) : w_(w), h_(h), caps_(caps) {
     bmi.h.biClrUsed = 256;
     DDPalette* p = State().primaryPal;
     if (p) memcpy(bmi.c, p->rgbq_, sizeof(bmi.c));
+    // The engine's sprite blitters read and write a few bytes outside the
+    // surface (e.g. a 4-byte load/store for 3 pixels at the left edge of the
+    // first row). Real DirectDraw memory has neighbours; a bare DIB starts on a
+    // fresh page, so that byte faulted (crash in the shadow/colour-table blit).
+    // The DIB therefore lives in a section with a page of padding in front of
+    // the pixels and spare rows after them.
+    const DWORD front = 4096, backRows = 4;
+    const size_t bytes = (size_t)front + (size_t)pitch_ * ((h ? h : 1) + backRows);
+    bmi.h.biHeight = -(LONG)((h ? h : 1) + backRows);
     dc_ = CreateCompatibleDC(nullptr);
-    dib_ = CreateDIBSection(dc_, (BITMAPINFO*)&bmi, DIB_RGB_COLORS, (void**)&bits_, nullptr, 0);
+    section_ = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, (DWORD)((uint64_t)bytes >> 32), (DWORD)bytes, nullptr);
+    if (section_) dib_ = CreateDIBSection(dc_, (BITMAPINFO*)&bmi, DIB_RGB_COLORS, (void**)&bits_, section_, front);
+    if (dib_) {   // GDI maps the section from its start, so the padding is there
+        MEMORY_BASIC_INFORMATION mi = {};
+        if (!VirtualQuery(bits_ - 16, &mi, sizeof(mi)) || mi.State != MEM_COMMIT) {
+            LOG("surface %dx%d: no memory before the pixels - using a plain DIB", w, h);
+            DeleteObject(dib_); dib_ = nullptr;
+        }
+    }
+    if (!dib_) {
+        if (section_) { CloseHandle(section_); section_ = nullptr; }
+        dib_ = CreateDIBSection(dc_, (BITMAPINFO*)&bmi, DIB_RGB_COLORS, (void**)&bits_, nullptr, 0);
+    }
     if (!dib_) {
         LOG("CreateDIBSection failed %dx%d (err %lu) - falling back to heap", w, h, GetLastError());
-        bits_ = (uint8_t*)calloc(pitch_, h ? h : 1);
+        heap_ = (uint8_t*)calloc(bytes, 1);
+        bits_ = heap_ + front;
     } else {
         oldBmp_ = SelectObject(dc_, dib_);
         memset(bits_, 0, (size_t)pitch_ * h);
@@ -213,7 +235,8 @@ DDSurface::~DDSurface() {
     if (pal_) pal_->Release();
     if (clipper_) clipper_->Release();
     if (dc_) { if (oldBmp_) SelectObject(dc_, oldBmp_); DeleteDC(dc_); }
-    if (dib_) DeleteObject(dib_); else free(bits_);
+    if (dib_) DeleteObject(dib_); else free(heap_);
+    if (section_) CloseHandle(section_);
 }
 
 void DDSurface::SyncColorTable() {
@@ -224,6 +247,8 @@ void DDSurface::SyncColorTable() {
 void DDSurface::SwapContents(DDSurface* o) {
     std::swap(bits_, o->bits_);
     std::swap(dib_, o->dib_);
+    std::swap(section_, o->section_);
+    std::swap(heap_, o->heap_);
     std::swap(dc_, o->dc_);
     std::swap(oldBmp_, o->oldBmp_);
     std::swap(pitch_, o->pitch_);

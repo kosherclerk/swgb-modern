@@ -65,6 +65,8 @@ public:
     DWORD caps_;
     uint8_t* bits_ = nullptr;
     HBITMAP dib_ = nullptr;
+    HANDLE section_ = nullptr;   // memory behind the DIB (padded, see the constructor)
+    uint8_t* heap_ = nullptr;    // fallback allocation (padded)
     HGDIOBJ oldBmp_ = nullptr;
     HDC dc_ = nullptr;
     int dcOut_ = 0;
